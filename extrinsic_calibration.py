@@ -488,6 +488,77 @@ class ExtrinsicCalibrator:
         
         return Rx @ Ry @ Rz
     
+    def check_quality(self, min_measurements: int = 3) -> dict:
+        """
+        Check current calibration quality without finalizing.
+        
+        Returns:
+            dict with:
+                - can_compute: bool - enough measurements to compute
+                - quality_ok: bool - meets quality thresholds
+                - num_valid: int - number of valid measurements
+                - azimuth_std: float - azimuth std in degrees (or None)
+                - elevation_std: float - elevation std in degrees (or None)
+                - mean_reproj_error: float - mean reprojection error (or None)
+                - recommendation: str - what to do next
+        """
+        valid = [m for m in self.measurements if m["success"]]
+        num_valid = len(valid)
+        
+        result = {
+            "can_compute": num_valid >= min_measurements,
+            "quality_ok": False,
+            "num_valid": num_valid,
+            "azimuth_std": None,
+            "elevation_std": None,
+            "mean_reproj_error": None,
+            "recommendation": ""
+        }
+        
+        if num_valid < min_measurements:
+            result["recommendation"] = f"Need at least {min_measurements} measurements (have {num_valid})"
+            return result
+        
+        # Compute quality metrics
+        azimuths = np.array([m["euler_angles"]["azimuth"] for m in valid])
+        elevations = np.array([m["euler_angles"]["elevation"] for m in valid])
+        reproj_errors = [m["reproj_error"] for m in valid]
+        
+        # Handle azimuth wraparound
+        if np.max(azimuths) - np.min(azimuths) > 180:
+            azimuths = np.where(azimuths < 0, azimuths + 360, azimuths)
+        
+        azimuth_std = float(np.std(azimuths))
+        elevation_std = float(np.std(elevations))
+        mean_reproj = float(np.mean(reproj_errors))
+        
+        result["azimuth_std"] = azimuth_std
+        result["elevation_std"] = elevation_std
+        result["mean_reproj_error"] = mean_reproj
+        
+        # Quality thresholds
+        GOOD_STD = 0.5  # degrees - good enough to stop
+        OK_STD = 1.0    # degrees - acceptable
+        GOOD_REPROJ = 1.0  # pixels
+        
+        if azimuth_std < GOOD_STD and elevation_std < GOOD_STD and mean_reproj < GOOD_REPROJ:
+            result["quality_ok"] = True
+            result["recommendation"] = "Quality is GOOD - can finalize calibration"
+        elif azimuth_std < OK_STD and elevation_std < OK_STD:
+            result["quality_ok"] = True
+            result["recommendation"] = "Quality is ACCEPTABLE - more measurements may improve results"
+        else:
+            issues = []
+            if azimuth_std >= OK_STD:
+                issues.append(f"azimuth std {azimuth_std:.2f}° >= {OK_STD}°")
+            if elevation_std >= OK_STD:
+                issues.append(f"elevation std {elevation_std:.2f}° >= {OK_STD}°")
+            if mean_reproj >= GOOD_REPROJ:
+                issues.append(f"reproj error {mean_reproj:.2f}px")
+            result["recommendation"] = f"Quality needs improvement: {', '.join(issues)}"
+        
+        return result
+
     def compute_extrinsics(self, min_measurements: int = 3) -> dict:
         """
         Compute final camera extrinsics by averaging multiple measurements.
@@ -1366,9 +1437,34 @@ def run_real_calibration(intrinsics_path: str, camera_id: str, output_path: str,
             if retry == 'n':
                 measurement_num += 1  # Skip this one
         
-        # Show progress
+        # Show progress and quality
         successful = len([m for m in calibrator.measurements if m["success"]])
         print(f"\n   📊 Progress: {successful} successful measurements")
+        
+        # Check quality after minimum measurements
+        if successful >= 3:
+            quality = calibrator.check_quality()
+            print(f"\n   📈 QUALITY CHECK:")
+            print(f"      Azimuth std:   {quality['azimuth_std']:.2f}° {'✓' if quality['azimuth_std'] < 1.0 else '✗'}")
+            print(f"      Elevation std: {quality['elevation_std']:.2f}° {'✓' if quality['elevation_std'] < 1.0 else '✗'}")
+            print(f"      Reproj error:  {quality['mean_reproj_error']:.2f} px")
+            print(f"      → {quality['recommendation']}")
+            
+            # If quality is good and we have enough measurements, offer to stop
+            if quality['quality_ok'] and measurement_num < num_positions:
+                print(f"\n   🎯 Quality threshold met!")
+                choice = input(f"   Continue to {num_positions} measurements or finalize now? [c]ontinue/[f]inalize: ").strip().lower()
+                if choice == 'f':
+                    print(f"   Finalizing with {successful} measurements...")
+                    break
+            
+            # If quality is poor and at limit, offer to continue
+            if not quality['quality_ok'] and measurement_num >= num_positions:
+                print(f"\n   ⚠️  Quality threshold NOT met at {num_positions} measurements.")
+                choice = input(f"   Take more measurements? [y]es/[n]o finalize anyway: ").strip().lower()
+                if choice == 'y':
+                    num_positions += 3  # Add 3 more slots
+                    print(f"   Extended to {num_positions} measurements.")
     
     # Compute final extrinsics
     print(f"\n" + "="*70)
@@ -1398,6 +1494,7 @@ def main():
     parser.add_argument("--synthetic", action="store_true", help="Use synthetic data (automatic, no interaction)")
     parser.add_argument("--demo", action="store_true", help="Demo mode: synthetic images with real operator workflow")
     parser.add_argument("--image-dir", help="Directory containing calibration images")
+    parser.add_argument("--min-measurements", type=int, default=3, help="Minimum measurements before quality check (default: 3)")
     
     args = parser.parse_args()
     
