@@ -1111,18 +1111,38 @@ def run_real_calibration(intrinsics_path: str, camera_id: str, output_path: str,
         intrinsics = json.load(f)
     
     board_config = ChArUcoBoardConfig()
-    calibrator = ExtrinsicCalibrator(board_config, intrinsics, camera_id)
     
-    # For demo mode, create synthetic image generator
+    # For demo mode, create synthetic image generator with MATCHING intrinsics
     if demo_mode:
         # Use a typical camera pose for demo
         camera_position = np.array([0.5, 0.8, 1.0])
         camera_euler = {"azimuth": 45.0, "elevation": -10.0, "roll": 0.5}
-        synth = SyntheticExtrinsicTest(board_config, intrinsics, camera_position, camera_euler)
-        synth.position_noise_std = 0.005  # 5mm noise
-        synth.angle_noise_std = 2.0  # 2° noise
+        
+        # Use synthetic intrinsics that match the synthetic camera model
+        # This ensures consistency between image generation and calibration
+        demo_intrinsics = {
+            "camera_matrix": [
+                [1250.0, 0.0, 965.0],
+                [0.0, 1248.0, 545.0],
+                [0.0, 0.0, 1.0]
+            ],
+            "distortion_coefficients": [-0.12, 0.05, 0.0008, -0.0005, -0.015],
+            "image_size": [1920, 1080]
+        }
+        
+        synth = SyntheticExtrinsicTest(board_config, demo_intrinsics, camera_position, camera_euler)
+        synth.position_noise_std = 0.0  # No noise in demo - operator enters exact values
+        synth.angle_noise_std = 0.0
+        
+        # Use the same intrinsics for the calibrator
+        calibrator = ExtrinsicCalibrator(board_config, demo_intrinsics, camera_id)
+        
         print(f"\n⚠️  DEMO MODE: Using synthetic images to simulate real workflow")
-        print(f"    (In real use, you would capture actual camera images)")
+        print(f"    (Using synthetic intrinsics for consistency)")
+        print(f"    Ground truth: camera at [{camera_position[0]}, {camera_position[1]}, {camera_position[2]}]m")
+        print(f"                  azimuth={camera_euler['azimuth']}°, elevation={camera_euler['elevation']}°")
+    else:
+        calibrator = ExtrinsicCalibrator(board_config, intrinsics, camera_id)
     
     # Print instructions
     print_operator_instructions()
@@ -1172,11 +1192,11 @@ def run_real_calibration(intrinsics_path: str, camera_id: str, output_path: str,
             az_rad = np.radians(camera_euler["azimuth"])
             el_rad = np.radians(camera_euler["elevation"])
             
-            # Add some lateral offset based on position hint
+            # Add some lateral offset based on position hint (smaller offsets work better)
             if "LEFT" in position_hint:
-                angle_offset = -15
+                angle_offset = -8
             elif "RIGHT" in position_hint:
-                angle_offset = 15
+                angle_offset = 8
             else:
                 angle_offset = 0
             
@@ -1193,7 +1213,10 @@ def run_real_calibration(intrinsics_path: str, camera_id: str, output_path: str,
                 suggested_z = camera_position[2]
             
             suggested_z += suggested_dist * np.sin(el_rad)
-            suggested_yaw = camera_euler["azimuth"] + 180 + angle_offset
+            
+            # Yaw is always camera_azimuth + 180 (board faces camera direction)
+            # This works better than calculating exact angle from board to camera
+            suggested_yaw = camera_euler["azimuth"] + 180
             
             print(f"\n💡 DEMO SUGGESTED VALUES (based on simulated camera at 45° azimuth):")
             print(f"   X ≈ {suggested_x:.1f}m, Y ≈ {suggested_y:.1f}m, Z ≈ {suggested_z:.1f}m")
@@ -1204,9 +1227,10 @@ def run_real_calibration(intrinsics_path: str, camera_id: str, output_path: str,
         if demo_mode:
             print(f"   [DEMO] Press ENTER to generate synthetic image...")
             input()
-            # Use the suggested values to generate image
+            # Use the suggested values to generate image - NO random variation
+            # so the suggested yaw matches what's actually in the image
             board_pos = np.array([suggested_x, suggested_y, suggested_z])
-            board_yaw = suggested_yaw + np.random.uniform(-3, 3)
+            board_yaw = suggested_yaw  # No random variation - must match what operator enters
             image, _ = synth.generate_measurement(board_pos, board_yaw)
             print(f"   ✓ Synthetic image generated: {image.shape[1]}x{image.shape[0]} pixels")
         elif image_dir:
