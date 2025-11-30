@@ -1016,7 +1016,7 @@ def print_operator_instructions():
 EQUIPMENT NEEDED:
   • ChArUco calibration board (1.1m × 1.1m, printed on RIGID material)
   • Tape measure (preferably laser distance meter)
-  • Angle reference (compass, protractor, or known alignment marks)
+  • Camera live preview (monitor/laptop showing camera feed)
 
 COORDINATE SYSTEM (World/IMU Frame):
   • Origin: IMU sensor location
@@ -1024,69 +1024,115 @@ COORDINATE SYSTEM (World/IMU Frame):
   • Y-axis: RIGHT (passenger side)
   • Z-axis: UP (toward sky)
   
-  Example: If board is 3m in front, 2m to the right, 0.5m above ground:
+  Example: If board is 3m in front, 2m to the right, 0.5m above IMU:
            X = 3.0, Y = 2.0, Z = 0.5
 
-BOARD PLACEMENT:
-  1. Hold board VERTICAL with printed markers FACING the camera
-  2. Position board 3-7 meters from camera
-  3. Board should be fully visible in camera frame
-  4. Keep board steady while capturing image
+╔══════════════════════════════════════════════════════════════════════╗
+║              ⚠️  CRITICAL: FINDING CAMERA OPTICAL AXIS               ║
+╠══════════════════════════════════════════════════════════════════════╣
+║                                                                      ║
+║  BEFORE taking measurements, you must find where the camera points:  ║
+║                                                                      ║
+║  1. Watch the camera live preview on a monitor                       ║
+║  2. Move the board around until it appears CENTERED in the image     ║
+║  3. The board should be in the MIDDLE of the frame, not off to side  ║
+║  4. Note this position - this is along the camera's optical axis     ║
+║  5. Note the YAW angle (direction from board toward camera)          ║
+║                                                                      ║
+║  For ALL measurements, keep the board CENTERED in the image!         ║
+║  Only vary the DISTANCE and HEIGHT, not the lateral position.        ║
+║                                                                      ║
+║  ┌─────────────────────────────────────┐                             ║
+║  │                                     │                             ║
+║  │           ╔═══════════╗             │  ← Board should be          ║
+║  │           ║   BOARD   ║             │    CENTERED like this       ║
+║  │           ║  (good)   ║             │                             ║
+║  │           ╚═══════════╝             │                             ║
+║  │                                     │                             ║
+║  └─────────────────────────────────────┘                             ║
+║                                                                      ║
+║  ┌─────────────────────────────────────┐                             ║
+║  │  ╔═══════════╗                      │  ← Board off to side        ║
+║  │  ║   BOARD   ║                      │    will cause ERRORS!       ║
+║  │  ║   (bad)   ║                      │                             ║
+║  │  ╚═══════════╝                      │                             ║
+║  │                                     │                             ║
+║  │                                     │                             ║
+║  └─────────────────────────────────────┘                             ║
+║                                                                      ║
+╚══════════════════════════════════════════════════════════════════════╝
 
-MEASURING BOARD POSITION (X, Y, Z):
-  • Measure from IMU origin to the CENTER of the board
-  • X: Distance FORWARD from IMU (positive = in front)
-  • Y: Distance RIGHT from IMU (positive = right side, negative = left)
-  • Z: Distance UP from IMU (positive = above, negative = below)
-  
-  TIP: Mark the board center with tape for easier measurement
+STEP-BY-STEP PROCEDURE:
 
-MEASURING BOARD YAW ANGLE:
-  • Yaw = compass direction FROM the board center TOWARD the camera
-  • 0° = board faces North (toward +X if +X is North)
-  • 90° = board faces East (toward +Y)
-  • 180° = board faces South (toward -X)
-  • 270° = board faces West (toward -Y)
-  
-  SIMPLE METHOD: If camera faces direction A°, and board faces camera,
-                 then board yaw = A° + 180° (normalized to 0-360°)
-  
-  Example: Camera points at 45° (NE), board faces camera → yaw = 225°
+  STEP 1: FIND OPTICAL AXIS (do this once at start)
+    • Place board ~4m from camera
+    • Watch live preview, move board left/right until CENTERED in image
+    • Measure this position (X, Y, Z) from IMU origin
+    • Calculate yaw: direction FROM board TO camera
+    • This yaw will be used for ALL measurements
+
+  STEP 2: TAKE MEASUREMENTS (repeat 7-10 times)
+    • Keep board CENTERED in camera view (same direction as Step 1)
+    • For each measurement:
+      - Move board to a new DISTANCE (3m, 4m, 5m, 6m, 7m)
+      - Vary HEIGHT slightly (±0.3m from baseline)
+      - Keep board facing same direction (same yaw)
+      - Measure X, Y, Z position from IMU
+      - Capture image
+
+  STEP 3: USE SAME YAW FOR ALL
+    • All measurements use the SAME yaw angle found in Step 1
+    • This is critical for accuracy!
 
 ╔══════════════════════════════════════════════════════════════════════╗
 ║                         TOP VIEW DIAGRAM                             ║
 ╠══════════════════════════════════════════════════════════════════════╣
 ║                                                                      ║
-║                    +X (Forward/North)                                ║
+║                    +X (Forward)                                      ║
 ║                          ↑                                           ║
 ║                          │                                           ║
-║           Board ═══      │                                           ║
-║           (facing        │      Measure this distance (X)            ║
-║            camera)       │      ←─────────────────────→              ║
+║                          │   Board positions along optical axis:     ║
+║            ═══           │        ═══        ═══        ═══          ║
+║           3m away        │       4m away    5m away    6m away       ║
 ║               ↘          │                                           ║
-║                 ↘ yaw    │                                           ║
-║                   ↘      │                                           ║
+║         optical ↘        │   (vary distance, keep board centered)    ║
+║           axis    ↘      │                                           ║
 ║    ←──────────────────── ● ──────────────────────→ +Y (Right)        ║
-║    Measure this         IMU                                          ║
-║    distance (Y)        Origin           ◎ Camera                     ║
-║                                        (looking at board)            ║
+║                         IMU                                          ║
+║                        Origin           ◎ Camera                     ║
 ║                                                                      ║
 ╚══════════════════════════════════════════════════════════════════════╝
 
+MEASURING BOARD POSITION (X, Y, Z):
+  • Measure from IMU origin to the CENTER of the board
+  • X: Distance FORWARD from IMU (positive = in front)
+  • Y: Distance RIGHT from IMU (positive = right, negative = left)
+  • Z: Height relative to IMU (positive = above, negative = below)
+  
+  TIP: Mark the board center with tape for consistent measurement
+
+MEASURING BOARD YAW ANGLE:
+  • Yaw = direction FROM the board center TOWARD the camera
+  • Measure once when you find the optical axis, use same value for all
+  • Use compass, or calculate from geometry
+  
+  Example: If camera points at ~45° and board faces camera → yaw ≈ 225°
+
 GOOD MEASUREMENT PRACTICES:
-  ✓ Take 7-10 measurements at DIFFERENT positions
-  ✓ Vary distance: 3m, 4m, 5m, 6m, 7m
-  ✓ Vary lateral position: left, center, right of camera view
-  ✓ Vary height: some above, some below camera level
-  ✓ Keep board facing camera each time
+  ✓ Find optical axis FIRST by centering board in preview
+  ✓ Keep board CENTERED in image for ALL measurements
+  ✓ Use SAME YAW for all measurements  
+  ✓ Vary DISTANCE: 3m, 4m, 5m, 6m, 7m
+  ✓ Vary HEIGHT: ±0.3m from baseline
+  ✓ Take 7-10 measurements total
   
 COMMON MISTAKES TO AVOID:
+  ✗ Board off to side of image (must be CENTERED!)
+  ✗ Different yaw angles for different measurements
   ✗ Measuring to board CORNER instead of CENTER
-  ✗ Wrong yaw direction (should be FROM board TO camera)
   ✗ Board tilted (not vertical)
   ✗ Board too close (<2m) or too far (>10m)
-  ✗ Confusing X/Y/Z axes
-  ✗ Board partially outside camera view
+  ✗ Varying lateral position instead of distance/height
 """)
 
 
