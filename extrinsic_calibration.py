@@ -98,6 +98,172 @@ import sys
 
 
 # =============================================================================
+# ROTATION UTILITIES
+# =============================================================================
+
+def rotation_matrix_to_quaternion(R: np.ndarray) -> np.ndarray:
+    """
+    Convert 3x3 rotation matrix to unit quaternion [w, x, y, z].
+
+    Uses Shepperd's method for numerical stability.
+    """
+    trace = np.trace(R)
+
+    if trace > 0:
+        s = 0.5 / np.sqrt(trace + 1.0)
+        w = 0.25 / s
+        x = (R[2, 1] - R[1, 2]) * s
+        y = (R[0, 2] - R[2, 0]) * s
+        z = (R[1, 0] - R[0, 1]) * s
+    elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
+        s = 2.0 * np.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2])
+        w = (R[2, 1] - R[1, 2]) / s
+        x = 0.25 * s
+        y = (R[0, 1] + R[1, 0]) / s
+        z = (R[0, 2] + R[2, 0]) / s
+    elif R[1, 1] > R[2, 2]:
+        s = 2.0 * np.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2])
+        w = (R[0, 2] - R[2, 0]) / s
+        x = (R[0, 1] + R[1, 0]) / s
+        y = 0.25 * s
+        z = (R[1, 2] + R[2, 1]) / s
+    else:
+        s = 2.0 * np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1])
+        w = (R[1, 0] - R[0, 1]) / s
+        x = (R[0, 2] + R[2, 0]) / s
+        y = (R[1, 2] + R[2, 1]) / s
+        z = 0.25 * s
+
+    q = np.array([w, x, y, z])
+    return q / np.linalg.norm(q)
+
+
+def quaternion_to_rotation_matrix(q: np.ndarray) -> np.ndarray:
+    """
+    Convert unit quaternion [w, x, y, z] to 3x3 rotation matrix.
+    """
+    q = q / np.linalg.norm(q)  # Ensure unit quaternion
+    w, x, y, z = q
+
+    R = np.array([
+        [1 - 2*(y*y + z*z), 2*(x*y - z*w), 2*(x*z + y*w)],
+        [2*(x*y + z*w), 1 - 2*(x*x + z*z), 2*(y*z - x*w)],
+        [2*(x*z - y*w), 2*(y*z + x*w), 1 - 2*(x*x + y*y)]
+    ])
+
+    return R
+
+
+def average_quaternions(quaternions: List[np.ndarray], weights: Optional[np.ndarray] = None) -> np.ndarray:
+    """
+    Compute the weighted average of multiple quaternions.
+
+    Uses the method from "Quaternion Averaging" by Markley et al.
+    This is equivalent to finding the eigenvector corresponding to the
+    largest eigenvalue of the weighted sum of outer products.
+
+    For small angular spreads (<10°), this is equivalent to the Karcher mean.
+
+    Args:
+        quaternions: List of unit quaternions [w, x, y, z]
+        weights: Optional weights for each quaternion (default: uniform)
+
+    Returns:
+        Averaged unit quaternion
+    """
+    n = len(quaternions)
+    if n == 0:
+        raise ValueError("Cannot average empty list of quaternions")
+
+    if n == 1:
+        return quaternions[0]
+
+    if weights is None:
+        weights = np.ones(n) / n
+    else:
+        weights = np.array(weights) / np.sum(weights)
+
+    # Build the 4x4 matrix M = sum(w_i * q_i * q_i^T)
+    M = np.zeros((4, 4))
+
+    # Ensure all quaternions are in the same hemisphere
+    # (flip sign if dot product with first quaternion is negative)
+    q0 = quaternions[0]
+    aligned_quats = [q0]
+    for q in quaternions[1:]:
+        if np.dot(q0, q) < 0:
+            aligned_quats.append(-q)
+        else:
+            aligned_quats.append(q)
+
+    for w, q in zip(weights, aligned_quats):
+        q = q.reshape(4, 1)
+        M += w * (q @ q.T)
+
+    # The average quaternion is the eigenvector with the largest eigenvalue
+    eigenvalues, eigenvectors = np.linalg.eigh(M)
+    avg_quat = eigenvectors[:, np.argmax(eigenvalues)]
+
+    # Ensure w > 0 convention
+    if avg_quat[0] < 0:
+        avg_quat = -avg_quat
+
+    return avg_quat / np.linalg.norm(avg_quat)
+
+
+def average_rotation_matrices(rotation_matrices: List[np.ndarray],
+                               weights: Optional[np.ndarray] = None) -> np.ndarray:
+    """
+    Compute the weighted average of multiple rotation matrices.
+
+    Converts to quaternions, averages, and converts back.
+    This is the mathematically correct way to average rotations.
+
+    Args:
+        rotation_matrices: List of 3x3 rotation matrices
+        weights: Optional weights for each matrix
+
+    Returns:
+        Averaged 3x3 rotation matrix
+    """
+    quaternions = [rotation_matrix_to_quaternion(R) for R in rotation_matrices]
+    avg_quat = average_quaternions(quaternions, weights)
+    return quaternion_to_rotation_matrix(avg_quat)
+
+
+def validate_rotation_matrix(R: np.ndarray, tolerance: float = 1e-6) -> Tuple[bool, str]:
+    """
+    Validate that a matrix is a proper rotation matrix.
+
+    Checks:
+    1. Orthonormality: R^T @ R = I
+    2. Determinant = +1 (proper rotation, not reflection)
+
+    Args:
+        R: 3x3 matrix to validate
+        tolerance: Numerical tolerance for checks
+
+    Returns:
+        (is_valid, message)
+    """
+    if R.shape != (3, 3):
+        return False, f"Expected 3x3 matrix, got {R.shape}"
+
+    # Check orthonormality
+    should_be_identity = R.T @ R
+    identity_error = np.linalg.norm(should_be_identity - np.eye(3))
+    if identity_error > tolerance:
+        return False, f"Not orthonormal: R^T @ R differs from I by {identity_error:.2e}"
+
+    # Check determinant
+    det = np.linalg.det(R)
+    if abs(det - 1.0) > tolerance:
+        return False, f"Determinant is {det:.6f}, expected 1.0"
+
+    return True, "Valid rotation matrix"
+
+
+# =============================================================================
 # CONFIGURATION
 # =============================================================================
 
@@ -462,9 +628,17 @@ class ExtrinsicCalibrator:
         cam_y = R[1, :]
         
         # Roll angle: measure rotation of cam_x around cam_z from the no-roll position
-        # Project cam_x_no_roll onto plane perpendicular to cam_z, then measure angle to cam_x
-        # Using: roll = atan2(cam_x_no_roll . cam_y, cam_x_no_roll . cam_x)
-        roll = np.degrees(np.arctan2(np.dot(cam_x_no_roll, cam_y), np.dot(cam_x_no_roll, cam_x)))
+        #
+        # In _euler_to_rotation, roll is applied as:
+        #   cam_x_new = cos(roll) * cam_x_original + sin(roll) * cam_y_original
+        #   cam_y_new = -sin(roll) * cam_x_original + cos(roll) * cam_y_original
+        #
+        # So: cam_x_no_roll · cam_x = cos(roll)
+        #     cam_x_no_roll · cam_y = -sin(roll)
+        #
+        # To extract roll: roll = atan2(sin(roll), cos(roll))
+        #                       = atan2(-cam_x_no_roll·cam_y, cam_x_no_roll·cam_x)
+        roll = np.degrees(np.arctan2(-np.dot(cam_x_no_roll, cam_y), np.dot(cam_x_no_roll, cam_x)))
         
         return {
             "azimuth": azimuth,
@@ -473,20 +647,63 @@ class ExtrinsicCalibrator:
         }
     
     def _euler_to_rotation(self, azimuth: float, elevation: float, roll: float) -> np.ndarray:
-        """Convert Euler angles (degrees) to rotation matrix."""
-        az, el, ro = np.radians([azimuth, elevation, roll])
-        
-        Rz = np.array([[np.cos(az), -np.sin(az), 0],
-                       [np.sin(az), np.cos(az), 0],
-                       [0, 0, 1]])
-        Ry = np.array([[np.cos(el), 0, np.sin(el)],
-                       [0, 1, 0],
-                       [-np.sin(el), 0, np.cos(el)]])
-        Rx = np.array([[1, 0, 0],
-                       [0, np.cos(ro), -np.sin(ro)],
-                       [0, np.sin(ro), np.cos(ro)]])
-        
-        return Rx @ Ry @ Rz
+        """
+        Convert Euler angles (degrees) to rotation matrix R_world_to_cam.
+
+        This method uses the SAME geometric construction as SyntheticExtrinsicTest
+        to ensure consistent rotation conventions across the codebase.
+
+        Camera frame convention:
+            Z = optical axis (forward, out of lens)
+            X = right (in image horizontal direction)
+            Y = down (in image vertical direction)
+
+        World frame convention:
+            X = forward
+            Y = right
+            Z = up
+
+        Euler angles:
+            azimuth: rotation around world Z (0° = forward, 90° = right)
+            elevation: angle from horizontal (positive = looking up)
+            roll: rotation around camera optical axis
+        """
+        az = np.radians(azimuth)
+        el = np.radians(elevation)
+        ro = np.radians(roll)
+
+        # Camera optical axis direction in world frame
+        cam_z_world = np.array([
+            np.cos(el) * np.cos(az),
+            np.cos(el) * np.sin(az),
+            np.sin(el)
+        ])
+
+        # Camera right axis (roughly horizontal, perpendicular to optical axis)
+        cam_x_world = np.array([np.sin(az), -np.cos(az), 0])
+        cam_x_world = cam_x_world / np.linalg.norm(cam_x_world)
+
+        # Camera down axis (perpendicular to both)
+        cam_y_world = np.cross(cam_z_world, cam_x_world)
+        cam_y_world = cam_y_world / np.linalg.norm(cam_y_world)
+
+        # Recalculate cam_x for orthogonality
+        cam_x_world = np.cross(cam_y_world, cam_z_world)
+        cam_x_world = cam_x_world / np.linalg.norm(cam_x_world)
+
+        # Apply roll (rotation around optical axis)
+        if abs(ro) > 1e-6:
+            # Rotation around cam_z
+            c, s = np.cos(ro), np.sin(ro)
+            cam_x_world_new = c * cam_x_world + s * cam_y_world
+            cam_y_world_new = -s * cam_x_world + c * cam_y_world
+            cam_x_world = cam_x_world_new
+            cam_y_world = cam_y_world_new
+
+        # Build rotation matrix (rows are camera axes in world coordinates)
+        R_world_to_cam = np.array([cam_x_world, cam_y_world, cam_z_world])
+
+        return R_world_to_cam
     
     def check_quality(self, min_measurements: int = 3) -> dict:
         """
@@ -562,42 +779,56 @@ class ExtrinsicCalibrator:
     def compute_extrinsics(self, min_measurements: int = 3) -> dict:
         """
         Compute final camera extrinsics by averaging multiple measurements.
-        
+
+        Uses proper quaternion averaging for rotations instead of naive Euler
+        angle averaging, which is mathematically correct for SO(3).
+
         Returns:
             dict with camera extrinsics and quality metrics
         """
         valid = [m for m in self.measurements if m["success"]]
-        
+
         if len(valid) < min_measurements:
             raise ValueError(f"Need at least {min_measurements} measurements, have {len(valid)}")
-        
+
         # Average position
         positions = np.array([m["t_cam_in_world"] for m in valid])
         avg_position = np.mean(positions, axis=0)
         position_std = np.std(positions, axis=0)
-        
-        # Average orientation (using quaternion averaging would be better, but Euler is simpler)
-        azimuths = [m["euler_angles"]["azimuth"] for m in valid]
-        elevations = [m["euler_angles"]["elevation"] for m in valid]
-        rolls = [m["euler_angles"]["roll"] for m in valid]
-        
-        # Handle azimuth wraparound
-        azimuths = np.array(azimuths)
+
+        # Average orientation using proper quaternion averaging (mathematically correct)
+        rotation_matrices = [m["R_world_to_cam"] for m in valid]
+        R_world_to_cam = average_rotation_matrices(rotation_matrices)
+
+        # Validate the resulting rotation matrix
+        is_valid, msg = validate_rotation_matrix(R_world_to_cam)
+        if not is_valid:
+            print(f"WARNING: Averaged rotation matrix failed validation: {msg}")
+            # Re-orthonormalize using SVD
+            U, _, Vt = np.linalg.svd(R_world_to_cam)
+            R_world_to_cam = U @ Vt
+
+        # Extract Euler angles from the averaged rotation matrix (for reporting)
+        avg_euler = self._rotation_to_euler(R_world_to_cam)
+        avg_azimuth = avg_euler["azimuth"]
+        avg_elevation = avg_euler["elevation"]
+        avg_roll = avg_euler["roll"]
+
+        # Compute Euler angle statistics for quality metrics
+        # (still useful for checking measurement consistency)
+        azimuths = np.array([m["euler_angles"]["azimuth"] for m in valid])
+        elevations = np.array([m["euler_angles"]["elevation"] for m in valid])
+        rolls = np.array([m["euler_angles"]["roll"] for m in valid])
+
+        # Handle azimuth wraparound for std calculation
         if np.max(azimuths) - np.min(azimuths) > 180:
-            azimuths = np.where(azimuths < 0, azimuths + 360, azimuths)
-        avg_azimuth = np.mean(azimuths)
-        if avg_azimuth > 180:
-            avg_azimuth -= 360
-        
-        avg_elevation = np.mean(elevations)
-        avg_roll = np.mean(rolls)
-        
-        azimuth_std = np.std(azimuths)
+            azimuths_for_std = np.where(azimuths < 0, azimuths + 360, azimuths)
+        else:
+            azimuths_for_std = azimuths
+
+        azimuth_std = np.std(azimuths_for_std)
         elevation_std = np.std(elevations)
         roll_std = np.std(rolls)
-        
-        # Compute rotation matrix from averaged Euler angles
-        R_world_to_cam = self._euler_to_rotation(avg_azimuth, avg_elevation, avg_roll)
         
         # Quality metrics
         reproj_errors = [m["reproj_error"] for m in valid]
