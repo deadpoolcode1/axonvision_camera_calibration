@@ -1,635 +1,553 @@
 # Camera Calibration System
 
-Multi-camera calibration system with IMU integration for vehicle/platform applications.
+Complete calibration system for multi-camera INS integration. Determines both intrinsic (internal) and extrinsic (position/orientation) camera parameters.
 
 ## Overview
 
-This system performs two-phase camera calibration:
-1. **Intrinsic Calibration** - Camera internal parameters (focal length, principal point, distortion)
-2. **Extrinsic Calibration** - Camera pose relative to IMU reference frame
+| Calibration | What it finds | When to do |
+|-------------|---------------|------------|
+| **Intrinsic** | Focal length, distortion, principal point | Once per camera (or after lens change) |
+| **Extrinsic** | Camera position AND orientation | Once per camera installation |
 
-## Requirements
-
-```bash
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
-# Install dependencies
-pip install opencv-contrib-python==4.8.1.78 "numpy<2"
-```
-
----
-
-## ChArUco Board Specifications
-
-For vehicle cameras at 2-8m distances:
-
-| Parameter | Value |
-|-----------|-------|
-| Size | 1.1m × 1.1m (110cm × 110cm) |
-| Pattern | 10×10 ChArUco squares |
-| Square size | 11cm |
-| Marker size | 8.5cm |
-| Dictionary | DICT_6X6_250 |
-| Material | **Rigid** aluminum composite or foam board |
-
-⚠️ **Board MUST be rigid** - paper or flexible material will cause calibration errors!
-
-### Printing the Board
-
-```python
-import cv2
-aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_250)
-board = cv2.aruco.CharucoBoard((10, 10), 0.11, 0.085, aruco_dict)
-board_image = board.generateImage((4400, 4400))  # High resolution for printing
-cv2.imwrite("charuco_board_10x10.png", board_image)
-```
-
-Print at **exactly 110cm × 110cm** on rigid material. Mark the center with tape.
-
----
-
-## Intrinsic Calibration
-
-Determines camera internal parameters (focal length, principal point, distortion).
-
-### Usage
-
-```bash
-# Synthetic mode (testing/development)
-python3 intrinsic_calibration.py --synthetic --camera-id camera_1 -o camera_1_intrinsics.json
-
-# Real camera mode (production)
-python3 intrinsic_calibration.py --camera-index 0 --camera-id camera_1 -o camera_1_intrinsics.json
-```
-
-### Options
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `--camera-id` | camera_1 | Camera identifier |
-| `--output, -o` | camera_intrinsics.json | Output JSON file |
-| `--num-images, -n` | 25 | Number of calibration images |
-| `--synthetic` | off | Use synthetic images for testing |
-| `--camera-index` | 0 | Camera device index (real mode) |
-
-### Output Format
-
-```json
-{
-  "camera_id": "camera_1",
-  "camera_matrix": [[fx, 0, cx], [0, fy, cy], [0, 0, 1]],
-  "distortion_coefficients": [k1, k2, p1, p2, k3],
-  "image_size": [1920, 1080],
-  "rms_error": 0.48,
-  "calibration_date": "2025-11-30 08:53:00"
-}
-```
-
-### Quality Metrics
-
-| RMS Error | Quality | Action |
-|-----------|---------|--------|
-| < 0.5 px | Good | Accept |
-| 0.5 - 1.0 px | Acceptable | Consider recalibration |
-| > 1.0 px | Poor | Recalibrate |
-
----
-
-## Extrinsic Calibration
-
-Determines camera position and orientation relative to the IMU/world reference frame.
-
-### Usage
-
-```bash
-# Demo mode (interactive training with synthetic images)
-python3 extrinsic_calibration.py --demo \
-    --intrinsics camera_1_intrinsics.json \
-    --camera-id camera_1 \
-    --output camera_1_extrinsics.json \
-    --num-positions 7
-
-# Synthetic mode (automated algorithm testing)
-python3 extrinsic_calibration.py --synthetic \
-    --intrinsics camera_1_intrinsics.json \
-    --camera-id camera_1 \
-    --output camera_1_extrinsics.json \
-    --num-positions 10
-
-# Real camera mode (production)
-python3 extrinsic_calibration.py \
-    --intrinsics camera_1_intrinsics.json \
-    --camera-id camera_1 \
-    --output camera_1_extrinsics.json \
-    --num-positions 7
-```
-
-### Options
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `--intrinsics, -i` | (required) | Path to intrinsics JSON |
-| `--camera-id` | camera_1 | Camera identifier |
-| `--output, -o` | camera_extrinsics.json | Output JSON file |
-| `--num-positions, -n` | 7 | Target number of board positions |
-| `--synthetic` | off | Automated test mode |
-| `--demo` | off | Interactive demo with synthetic images |
-| `--min-measurements` | 3 | Minimum before quality check |
-
-### Adaptive Stopping
-
-The calibration automatically checks quality after every measurement (once minimum is reached):
+## Coordinate System (NED)
 
 ```
-📈 QUALITY CHECK:
-   Azimuth std:   0.32° ✓
-   Elevation std: 0.28° ✓
-   Reproj error:  0.45 px
-   → Quality is GOOD - can finalize calibration
-
-🎯 Quality threshold met!
-   Continue to 7 measurements or finalize now? [c]ontinue/[f]inalize: 
-```
-
-**Quality thresholds:**
-
-| Metric | Good (can stop) | Acceptable | Poor (keep going) |
-|--------|-----------------|------------|-------------------|
-| Azimuth std | < 0.5° | < 1.0° | ≥ 1.0° |
-| Elevation std | < 0.5° | < 1.0° | ≥ 1.0° |
-| Reproj error | < 1.0 px | < 1.5 px | ≥ 1.5 px |
-
-**Workflow:**
-- After 3+ measurements, quality is checked
-- If quality is GOOD → option to finalize early
-- If quality is POOR at target → option to take more measurements
-- System suggests when to stop or continue
-
-### Output Format
-
-```json
-{
-  "camera_id": "camera_1",
-  "rotation_matrix": [[r11, r12, r13], [r21, r22, r23], [r31, r32, r33]],
-  "translation_vector": [x, y, z],
-  "euler_angles": {
-    "azimuth": 45.0,
-    "elevation": -10.0,
-    "roll": 0.5
-  },
-  "quality_metrics": {
-    "num_measurements": 7,
-    "mean_reproj_error_px": 0.45,
-    "azimuth_std_deg": 0.3,
-    "elevation_std_deg": 0.2
-  },
-  "calibration_date": "2025-11-30 10:30:00"
-}
-```
-
-### Quality Metrics
-
-| Metric | Good | Acceptable | Poor |
-|--------|------|------------|------|
-| Reprojection error | < 0.5 px | 0.5 - 1.5 px | > 1.5 px |
-| Azimuth std | < 0.3° | 0.3 - 1.0° | > 1.0° |
-| Elevation std | < 0.3° | 0.3 - 1.0° | > 1.0° |
-| Position error | < 5% | 5 - 10% | > 10% |
-
----
-
-## Coordinate System
-
-```
-World/IMU Frame:
-  • Origin: IMU sensor location
-  • X-axis: FORWARD (direction vehicle faces)
-  • Y-axis: RIGHT (passenger side)
-  • Z-axis: UP (toward sky)
-
-Camera Frame:
-  • Z-axis: Optical axis (forward, out of lens)
-  • X-axis: Right (image horizontal)
-  • Y-axis: Down (image vertical)
-
-Euler Angles:
-  • Azimuth: Camera heading (0° = forward/+X, 90° = right/+Y)
-  • Elevation: Angle from horizontal (negative = looking down)
-  • Roll: Rotation around optical axis
-```
-
-```
-                TOP VIEW
-                
         +X (Forward)
-             ↑
-             │
-             │    Camera optical axis
-             │        ↗
-             │      ↗  azimuth angle
-             │    ↗
-             │  ↗
-  ───────────●─────────→ +Y (Right)
-            IMU
-           Origin      ◎ Camera
+            |
+            |
+  -Y <------o------> +Y
+ (Left)     |      (Right)
+            |
+            v
+        +Z (Down)
+        
+Origin: Vehicle reference point (marked on exterior)
+```
+
+**Important:** Z is DOWN, so heights above ground are NEGATIVE Z values.
+- Camera 1.5m above ground: Z = -1.5m
+- Board center 0.9m above ground: Z = -0.9m
+
+## Equipment Required
+
+### ChArUco Calibration Board
+
+- **Size:** 10x10 squares, 1.1m x 1.1m total
+- **Square size:** 11cm
+- **Marker size:** 8.5cm
+- **Dictionary:** ARUCO_6X6_250
+- **Material:** RIGID (foam board, aluminum composite, or acrylic)
+
+### Other Equipment
+
+| Item | Purpose | Accuracy |
+|------|---------|----------|
+| Board stand (adjustable height) | Hold board steady | - |
+| RTK GPS receiver | Measure ground positions | ~1-2cm |
+| Laser distance meter | Camera-to-board distance | ~2cm |
+| Laser/tape for height | Board center height from ground | ~2cm |
+| Tape measure | IMU offset, camera prior estimates | ~10-20cm |
+| INS unit | Provide vehicle orientation | - |
+| Laptop | Run calibration software | - |
+
+### Technician Roles
+
+| Role | Location | Responsibilities |
+|------|----------|------------------|
+| **T1** (Computer) | At laptop | View camera feed, record data, run software |
+| **T2** (Field) | At board/vehicle | Position equipment, take measurements, report values |
+
+---
+
+## Part 1: Intrinsic Calibration
+
+Finds camera internal parameters. **Single operator, no INS needed.**
+
+### Procedure
+
+1. Take 15-20 images of the ChArUco board
+2. Vary distance (1-5m), angles (up to 45 deg tilt), and positions (all corners)
+3. Run calibration
+
+```bash
+python3 intrinsic_calibration.py \
+    --images intrinsic_images/ \
+    --output camera_intrinsics.json
+```
+
+### Expected Results
+
+```
+RMS reprojection error: 0.32 px  <-- Should be < 0.5 px
 ```
 
 ---
 
-## Extrinsic Calibration Procedure (Two-Operator)
+## Part 2: Extrinsic Calibration (Known Ground Positions + RTK)
 
-### Personnel Required
+Finds camera position AND orientation relative to vehicle using **RTK-measured ground positions**.
 
-| Role | Responsibilities |
-|------|------------------|
-| **Operator A** (at board) | Holds/positions board, measures position, reports measurements |
-| **Operator B** (at monitor) | Watches camera preview, directs positioning, captures images, records data |
+**Key advantages:**
+- Position accuracy: <1cm relative to reference point
+- Orientation accuracy: <0.1 deg
+- Each camera calibrated INDEPENDENTLY (scales to N cameras)
+- No inter-camera measurements needed
 
-### Equipment Checklist
+### How It Works
 
-- [ ] ChArUco board (1.1m × 1.1m, rigid, center marked)
-- [ ] Board stand or tripod (to hold board vertical)
-- [ ] Laser distance meter (preferred) or tape measure
-- [ ] Monitor/laptop showing camera live preview
-- [ ] Communication (radio or line-of-sight voice)
-- [ ] Clipboard for recording measurements
-
-### Procedure Overview
+1. Mark reference point on vehicle, measure IMU offset once
+2. Use RTK to mark and measure ground positions for each camera
+3. Place board at each position, measure height and distance, capture image
+4. Optimization solves for camera pose that makes all measurements consistent
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                    EXTRINSIC CALIBRATION WORKFLOW                   │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  ┌──────────────┐         Voice/Radio          ┌──────────────┐    │
-│  │              │ ◄──────────────────────────► │              │    │
-│  │  OPERATOR A  │                              │  OPERATOR B  │    │
-│  │  (at board)  │                              │ (at monitor) │    │
-│  │              │                              │              │    │
-│  └──────┬───────┘                              └──────┬───────┘    │
-│         │                                             │            │
-│         ▼                                             ▼            │
-│  • Position board                              • Watch preview     │
-│  • Measure X, Y, Z                             • Guide centering   │
-│  • Hold board steady                           • Capture image     │
-│  • Report measurements                         • Record data       │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
+Vehicle Reference Point (e.g., rear bumper corner)
+        |
+        v
+    [0,0,0] -----> X (forward)
+        |
+        |  * Spot 1 [4.0, 0.85, -0.9]
+        |      * Spot 2 [4.5, 1.0, -0.9]
+        v          * Spot 3 [5.0, 1.15, -0.9]
+        Y (right)
+        
+                    Camera (position solved by optimization)
 ```
 
-### Step-by-Step Procedure
+---
 
-#### Phase 1: Setup
+### PHASE 1: One-Time Vehicle Setup
 
-1. **Position equipment:**
-   - Operator B sets up monitor with camera live preview
-   - Operator A takes board and measuring equipment to field
+*Do once per vehicle. Results reused for all cameras.*
 
-2. **Establish communication:**
-   - Test voice/radio communication between operators
-   - Agree on terminology: "left/right" = Operator A's left/right
+#### Step 1.1: Mark Reference Point
 
-3. **Identify IMU origin:**
-   - Mark IMU location clearly (this is the measurement origin)
-   - All X, Y, Z measurements are FROM this point
+| Who | Action |
+|-----|--------|
+| T1 | Choose a visible point on vehicle exterior (rear corner, tow hook, etc.) |
+| T2 | Mark it permanently (paint dot, engraved mark, sticker) |
 
-#### Phase 2: Find Optical Axis (First Measurement)
+**Good reference points:**
+- Rear tow hook
+- Corner of bumper
+- Wheel hub center
+- Any permanent, visible feature
 
-This is the most critical step - it establishes the camera direction.
+#### Step 1.2: Measure IMU Offset
 
-```
-OPERATOR B                              OPERATOR A
-──────────────────────────────────────────────────────────────────────
-"I don't see the board yet"             [Walks into expected camera
-                                         field of view, ~4m away]
+| Who | Action |
+|-----|--------|
+| T2 | Measure from reference point to IMU center with tape measure |
+| T1 | Record as `imu_offset = [X, Y, Z]` |
 
-"I see you! Move LEFT..."               [Moves left]
-
-"More... more... STOP!"                 [Stops]
-
-"Now move FORWARD a bit..."             [Moves forward]
-
-"STOP! You're centered. Hold there."    [Holds position]
-
-"What's your position?"                 [Measures from IMU]
-                                        "X = 3.2, Y = 2.9, Z = 0.5"
-
-[Records: X=3.2, Y=2.9, Z=0.5]
-[Calculates yaw ≈ 225°]
-[Captures image]
-
-"Good! That's position 1. The yaw       [Remembers: stay on this line,
-is 225°, use that for all."             always face 225°]
-──────────────────────────────────────────────────────────────────────
-```
-
-**Calculating Yaw:**
-- Yaw = direction FROM board TO camera
-- If board is at (3.2, 2.9) and camera/IMU is at (0.5, 0.8):
-  - Direction = atan2(0.8 - 2.9, 0.5 - 3.2) = atan2(-2.1, -2.7) ≈ 218° ≈ **225°**
-
-#### Phase 3: Remaining Measurements (6 more positions)
-
-For each measurement, Operator A moves along the optical axis (closer/further) and varies height:
+**Directions:**
+- X: Forward distance (IMU forward of reference = positive)
+- Y: Right distance (IMU right of reference = positive)
+- Z: Down distance (IMU below reference = positive, IMU above = negative)
 
 ```
-OPERATOR B                              OPERATOR A
-──────────────────────────────────────────────────────────────────────
-MEASUREMENT 2:
-"Walk STRAIGHT BACK about 1 meter"      [Walks back along same line]
-
-"Little RIGHT... stop, you're           [Adjusts until centered]
-centered again."
-
-"Raise the board about 30cm"            [Raises board]
-
-"What's your position?"                 "X = 4.0, Y = 3.6, Z = 0.8"
-                                        "Yaw still 225°"
-
-[Captures image]
-"Good! Position 2 done."
-──────────────────────────────────────────────────────────────────────
-MEASUREMENT 3:
-"Move back another meter,               [Moves back, lowers board]
-lower the board this time"
-
-"Adjust LEFT slightly..."               [Adjusts]
-
-"Good, what's your position?"           "X = 4.9, Y = 4.4, Z = 0.3"
-
-[Captures image]
-──────────────────────────────────────────────────────────────────────
-... repeat for measurements 4-7 ...
-──────────────────────────────────────────────────────────────────────
+Example: Reference at ground level, IMU is 1m forward, 1.2m UP
+imu_offset = [1.0, 0.0, -1.2]   (negative Z because IMU is above reference)
 ```
 
-#### Measurement Pattern
+**Accuracy:** ±20cm acceptable. This is a systematic offset applied to all cameras.
 
-| # | Distance | Height | Notes |
-|---|----------|--------|-------|
-| 1 | 3-4m | Baseline | Find optical axis, establish yaw |
-| 2 | 4-5m | +30cm | Walk back, raise board |
-| 3 | 5-6m | -20cm | Walk back, lower board |
-| 4 | 3-4m | -30cm | Come forward, low position |
-| 5 | 4-5m | Baseline | Mid distance, normal height |
-| 6 | 5-6m | +30cm | Far, high position |
-| 7 | 6-7m | Baseline | Furthest position |
+---
 
-### Critical Rules
+### PHASE 2: Ground Position Setup
 
-```
-╔══════════════════════════════════════════════════════════════════════╗
-║                        ⚠️  CRITICAL RULES                            ║
-╠══════════════════════════════════════════════════════════════════════╣
-║                                                                      ║
-║  1. KEEP BOARD CENTERED IN IMAGE                                     ║
-║     • Operator B must guide Operator A until board is centered       ║
-║     • "Centered" = board in middle of frame, not off to side         ║
-║                                                                      ║
-║  2. USE SAME YAW FOR ALL MEASUREMENTS                                ║
-║     • Calculate yaw from first (centered) position                   ║
-║     • Operator A keeps board facing same direction every time        ║
-║                                                                      ║
-║  3. VARY DISTANCE AND HEIGHT ONLY                                    ║
-║     • Move closer/further along optical axis                         ║
-║     • Move up/down (±30cm)                                           ║
-║     • Do NOT move left/right of optical axis                         ║
-║                                                                      ║
-║  4. MEASURE FROM IMU ORIGIN                                          ║
-║     • All X, Y, Z measurements are from IMU location                 ║
-║     • Measure to board CENTER (mark it with tape)                    ║
-║                                                                      ║
-╚══════════════════════════════════════════════════════════════════════╝
-```
+*Do once per camera set.*
 
-### Visual Guide: Correct vs Incorrect
+#### Step 2.1: RTK Setup
+
+| Who | Action |
+|-----|--------|
+| T2 | Position RTK base station with clear sky view |
+| T2 | Wait for RTK fix (1-2 minutes) |
+| T2 | Place rover at vehicle reference point |
+| T1 | Record reference point RTK coordinates as origin |
+
+#### Step 2.2: Mark Ground Positions
+
+For each camera, mark 3-5 positions within its FOV:
+
+| Who | Action |
+|-----|--------|
+| T1 | View camera feed, identify suitable positions |
+| T2 | Walk to position, place RTK rover on ground |
+| T1 | Record RTK coordinates, compute X (forward), Y (right) from reference |
+| T2 | Mark position on ground (spray paint, stake, tape) |
+
+**Tips:**
+- Space positions 0.5-1m apart
+- Vary distances from camera (2-4m typical)
+- All positions must show full board in camera FOV
 
 ```
-CAMERA VIEW - CORRECT (board centered):
-
-    ┌─────────────────────────────────────┐
-    │                                     │
-    │           ╔═══════════╗             │
-    │           ║           ║             │
-    │           ║   BOARD   ║  ← GOOD!    │
-    │           ║           ║             │
-    │           ╚═══════════╝             │
-    │                                     │
-    └─────────────────────────────────────┘
-
-
-CAMERA VIEW - INCORRECT (board off to side):
-
-    ┌─────────────────────────────────────┐
-    │                                     │
-    │  ╔═══════════╗                      │
-    │  ║           ║                      │
-    │  ║   BOARD   ║  ← BAD! Will cause   │
-    │  ║           ║    calibration       │
-    │  ╚═══════════╝    errors!           │
-    │                                     │
-    └─────────────────────────────────────┘
+Example ground positions for front-right camera:
+  Position 1: X=4.0m forward, Y=0.85m right
+  Position 2: X=4.5m forward, Y=1.00m right
+  Position 3: X=5.0m forward, Y=1.15m right
 ```
 
-```
-TOP VIEW - CORRECT (positions along optical axis):
+---
 
-                    Camera optical axis
-                          ↓
-        ═══       ═══       ═══       ═══
-        M1        M2        M3        M4
-        (3m)      (4m)      (5m)      (6m)
-          \         \         \         \
-           \         \         \         \
-            \─────────\─────────\─────────\ optical axis
-             \         \         \         \
-              ◎ Camera
+### PHASE 3: Camera Prior Measurement
 
-    ✓ All boards along same line (optical axis)
-    ✓ All boards face same direction (same yaw)
-    ✓ Only distance varies
+*Do for each camera before capture.*
 
+#### Step 3.1: Measure Camera Position (Rough Estimate)
 
-TOP VIEW - INCORRECT (positions scattered):
-
-                    
-        ═══                   ═══
-        M1                    M3
-                    
-                ═══       
-                M2       ═══
-                         M4
-              ◎ Camera
-
-    ✗ Boards at different angles
-    ✗ Not along optical axis
-    ✗ Will cause large errors!
-```
-
-### Measurement Recording Sheet
+| Who | Action |
+|-----|--------|
+| T2 | Use tape measure from reference point to camera lens center |
+| T1 | Record as `camera_prior_position = [X, Y, Z]` |
 
 ```
-EXTRINSIC CALIBRATION - DATA SHEET
-
-Camera ID: ________________     Date: ________________
-Operator A: _______________     Operator B: _______________
-
-IMU Origin marked at: _________________________________
-
-YAW ANGLE (from first measurement): ______°
-
-┌─────┬────────┬────────┬────────┬─────────┬──────────┬─────────┐
-│  #  │ X (m)  │ Y (m)  │ Z (m)  │ Yaw (°) │ Centered?│ Corners │
-├─────┼────────┼────────┼────────┼─────────┼──────────┼─────────┤
-│  1  │        │        │        │         │  Y / N   │         │
-├─────┼────────┼────────┼────────┼─────────┼──────────┼─────────┤
-│  2  │        │        │        │         │  Y / N   │         │
-├─────┼────────┼────────┼────────┼─────────┼──────────┼─────────┤
-│  3  │        │        │        │         │  Y / N   │         │
-├─────┼────────┼────────┼────────┼─────────┼──────────┼─────────┤
-│  4  │        │        │        │         │  Y / N   │         │
-├─────┼────────┼────────┼────────┼─────────┼──────────┼─────────┤
-│  5  │        │        │        │         │  Y / N   │         │
-├─────┼────────┼────────┼────────┼─────────┼──────────┼─────────┤
-│  6  │        │        │        │         │  Y / N   │         │
-├─────┼────────┼────────┼────────┼─────────┼──────────┼─────────┤
-│  7  │        │        │        │         │  Y / N   │         │
-└─────┴────────┴────────┴────────┴─────────┴──────────┴─────────┘
-
-Notes:
-_____________________________________________________________
-_____________________________________________________________
+Example: Camera is 1.5m forward, 0.2m right, 1.5m ABOVE reference
+camera_prior_position = [1.5, 0.2, -1.5]   (negative Z = above)
 ```
+
+**Accuracy:** ±20cm is fine. Optimizer will refine this.
+
+#### Step 3.2: Estimate Camera Orientation
+
+| Who | Action |
+|-----|--------|
+| T1 | Estimate from mounting specs or visual inspection |
+| T1 | Record as `camera_prior_orientation = [azimuth, elevation, roll]` |
+
+**Angles:**
+- Azimuth: 0=forward, +90=right, -90=left, ±180=rear
+- Elevation: 0=horizontal, positive=looking down
+- Roll: usually 0 (camera upright)
+
+**Accuracy:** ±5 deg is fine. Optimizer will refine this.
+
+---
+
+### PHASE 4: Calibration Capture
+
+*Do for each camera, at each marked position.*
+
+#### Step 4.1: Position Board
+
+| Who | Action |
+|-----|--------|
+| T2 | Place board stand at marked ground position |
+| T2 | Adjust so board CENTER is directly above the mark |
+| T2 | Hold board LEVEL (vertical, not tilted) |
+| T2 | Face board toward camera |
+
+```
+CORRECT board placement:
+
+    Marked spot on ground
+           |
+           v
+    +------+------+
+    |      |      |
+    |   BOARD     |  <- Board center directly above mark
+    |   CENTER    |
+    |      |      |
+    +------+------+
+```
+
+#### Step 4.2: Measure Board Center Height
+
+| Who | Action |
+|-----|--------|
+| T2 | Use laser or tape to measure height of board CENTER from ground |
+| T2 | Report to T1 (e.g., "0.9 meters") |
+| T1 | Record board_height |
+
+**Board position computation:**
+```
+Ground position from RTK:  X=4.0, Y=0.85
+Board center height:       0.9m above ground
+
+Board position = [4.0, 0.85, -0.9]   (negative Z = above ground)
+```
+
+#### Step 4.3: Measure Distance
+
+| Who | Action |
+|-----|--------|
+| T2 | Use laser meter from camera lens to board center |
+| T2 | Report to T1 (e.g., "2.65 meters") |
+| T1 | Record laser_distance |
+
+#### Step 4.4: Verify and Capture
+
+| Who | Action |
+|-----|--------|
+| T1 | Check camera preview: board centered, no blur, no glare |
+| T1 | Verify corner detection: "corners=81" (all corners visible) |
+| T1 | Capture image |
+| T1 | Verify: "reproj < 1px" |
+
+#### Step 4.5: Record INS Data
+
+| Who | Action |
+|-----|--------|
+| T1 | Record current INS yaw/pitch/roll (auto-captured or manual entry) |
+
+**Repeat for all positions (minimum 3, recommended 5)**
+
+---
+
+### PHASE 5: Run Calibration
+
+| Who | Action |
+|-----|--------|
+| T1 | Verify all data entered correctly |
+| T1 | Run optimization |
+| T1 | Check results meet specs |
+| T1 | Save to JSON file |
+
+---
+
+### Expected Results
+
+```
+POSITION RELATIVE TO REFERENCE POINT (optimized from RTK data):
+   Computed: [1.501, 0.198, -1.501]m
+   Truth:    [1.500, 0.200, -1.500]m
+   Error:    0.2cm (was 18.7cm before optimization)
+
+POSITION RELATIVE TO IMU (= pos_ref - imu_offset):
+   Computed: [0.421, 0.258, -0.401]m
+   Truth:    [0.500, 0.200, -0.300]m
+   Error:    14.1cm (limited by IMU offset error)
+
+ORIENTATION (optimized):
+   Azimuth:   +15.01 deg (error: +0.010 deg)
+   Elevation: +5.01 deg (error: +0.007 deg)
+
+SPEC COMPLIANCE:
+  Position (ref point):   0.2cm  PASS  (spec: < 5cm)
+  Position (IMU):        14.1cm  PASS  (spec: < 25cm)
+  Azimuth:              0.010 deg PASS  (spec: < 1 deg)
+  Elevation:            0.007 deg PASS  (spec: < 1 deg)
+```
+
+### Interpreting Results
+
+| Parameter | Meaning | Example |
+|-----------|---------|---------|
+| Azimuth +15 deg | Camera points 15 deg RIGHT of vehicle forward | Right-facing camera |
+| Azimuth -45 deg | Camera points 45 deg LEFT of vehicle forward | Left-facing camera |
+| Elevation +5 deg | Camera points 5 deg DOWN from horizontal | Typical downward tilt |
+| Elevation -5 deg | Camera points 5 deg UP from horizontal | Upward-looking camera |
+| Roll 0 deg | Camera "up" aligns with vehicle "up" | Normal mounting |
 
 ---
 
 ## Multi-Camera Calibration
 
-For systems with N cameras (with or without overlapping fields of view):
+Each camera is calibrated **independently** with its own ground positions.
 
-```bash
-# Camera 1
-python3 intrinsic_calibration.py --camera-index 0 -o cam1_intrinsics.json
-python3 extrinsic_calibration.py -i cam1_intrinsics.json -o cam1_extrinsics.json
+**Critical:** All ground positions are measured from the **SAME vehicle reference point**. This ensures all cameras end up in a unified coordinate system.
 
-# Camera 2
-python3 intrinsic_calibration.py --camera-index 1 -o cam2_intrinsics.json
-python3 extrinsic_calibration.py -i cam2_intrinsics.json -o cam2_extrinsics.json
-
-# Camera 3 (etc.)
-python3 intrinsic_calibration.py --camera-index 2 -o cam3_intrinsics.json
-python3 extrinsic_calibration.py -i cam3_intrinsics.json -o cam3_extrinsics.json
+```
+Vehicle Reference Point
+          |
+          v
+      [0,0,0]
+          |
+   +------+------+
+   |             |
+   | Spots for   | Spots for
+   | LEFT cam    | RIGHT cam
+   |             |
 ```
 
-Each camera is calibrated independently to the same IMU origin, so:
-- Overlapping cameras: will see same world points consistently
-- Non-overlapping cameras: can still transform to common world frame
-- All cameras share the same coordinate system
+**Example Setup:**
+
+| Camera | Ground Positions (in its FOV) |
+|--------|-------------------------------|
+| Front-right | [4.0, 0.85, -0.9], [4.5, 1.0, -0.9], [5.0, 1.15, -0.9] |
+| Front-left | [4.0, -0.85, -0.9], [4.5, -1.0, -0.9], [5.0, -1.15, -0.9] |
+| Rear | [-3.0, 0.5, -0.9], [-3.5, -0.5, -0.9], [-4.0, 0.0, -0.9] |
+
+**Procedure:**
+
+1. Choose ONE vehicle reference point (use for ALL cameras)
+2. Measure IMU offset ONCE (use for ALL cameras)
+3. For each camera:
+   - Mark 3-5 spots on ground within that camera's FOV
+   - Measure each spot from vehicle reference (RTK)
+   - Place board at each spot, measure height and distance, capture
+   - Run calibration
+4. Each camera produces its own JSON file
+
+**Result:** All cameras share the same coordinate system (NED, origin at vehicle reference).
+
+---
+
+## Output Format
+
+### Extrinsics JSON
+
+```json
+{
+  "camera_id": "camera_front_right",
+  "translation_vector_reference": [1.501, 0.198, -1.501],
+  "translation_vector_imu": [0.421, 0.258, -0.401],
+  "imu_offset_measured": [1.08, -0.06, -1.10],
+  "rotation_matrix": [[...], [...], [...]],
+  "euler_angles": {
+    "azimuth": 15.01,
+    "elevation": 5.01,
+    "roll": 0.49
+  },
+  "board_center_height_m": 0.9,
+  "coordinate_system": {
+    "frame": "NED (X=Forward, Y=Right, Z=Down)",
+    "reference_point": "Vehicle reference mark",
+    "note": "translation_vector_imu = translation_vector_reference - imu_offset"
+  },
+  "optimization_converged": true
+}
+```
+
+**Key outputs:**
+- `translation_vector_reference`: Camera position relative to reference point (very accurate, <1cm)
+- `translation_vector_imu`: Camera position relative to IMU (inherits IMU offset error ~15-20cm)
+- `euler_angles`: Camera orientation (very accurate, <0.1 deg)
+
+**Note:** If you improve IMU offset measurement later, just update `imu_offset` - no need to recalibrate cameras.
+
+---
+
+## Accuracy Summary
+
+| Parameter | Accuracy | Limited By |
+|-----------|----------|------------|
+| Position (vs reference) | <1cm | RTK accuracy |
+| Position (vs IMU) | ~15-20cm | IMU offset measurement |
+| Azimuth | <0.1 deg | Optimization |
+| Elevation | <0.1 deg | Optimization |
 
 ---
 
 ## Troubleshooting
 
-### Intrinsic Calibration
+### "No corners detected"
+- Board too far (>5m) or too close (<1.5m)
+- Poor lighting or glare on board
+- Board out of focus
+- Board tilted too much (should be nearly vertical)
 
-| Problem | Cause | Solution |
-|---------|-------|----------|
-| High RMS (>1px) | Poor corner detection | Better lighting, sharper focus |
-| Few corners detected | Board too far/angled | Move closer, face camera |
-| Unstable focal length | Insufficient coverage | Capture more varied poses |
+### High position error
+- RTK positions inaccurate (check fix quality)
+- Board not placed at CENTER of marked spots
+- Board height measurement wrong
+- Fewer than 3 measurements
 
-### Extrinsic Calibration
+### High orientation error
+- Board not held level during capture
+- INS providing incorrect orientation
+- Prior orientation estimate too far off (>10 deg)
 
-| Problem | Cause | Solution |
-|---------|-------|----------|
-| High azimuth std (>1°) | Board not centered | Re-do with better centering |
-| High elevation std (>1°) | Inconsistent height measurement | Use laser distance meter |
-| Large position error | Wrong IMU origin | Verify measurement reference point |
-| Detection failures | Lighting/blur | Improve conditions, hold board steady |
-| Results don't converge | Different yaw angles used | Use SAME yaw for all measurements |
-
-### Common Mistakes
-
-| Mistake | Why It's Bad | How to Fix |
-|---------|--------------|------------|
-| Board off-center in image | Adds systematic angle error | Always center board in preview |
-| Different yaw each measurement | Inconsistent geometry | Use same yaw from first measurement |
-| Measuring to board corner | Wrong reference point | Always measure to board CENTER |
-| Board not vertical | Invalid pose assumption | Use level, keep board plumb |
-| Moving laterally instead of along axis | Breaks centering assumption | Move only closer/further and up/down |
+### Optimization fails to converge
+- Check that prior position/orientation estimates are reasonable
+- Ensure board is visible and detected in all captures
+- Verify ground positions are correctly measured
+- Need at least 3 measurements
 
 ---
 
-## Expected Accuracy
-
-### With Proper Technique
-
-| Metric | Expected Value |
-|--------|----------------|
-| Position error | < 5 cm (< 5% of distance) |
-| Azimuth error | < 0.5° |
-| Elevation error | < 0.5° |
-| Roll error | < 1° |
-
-### Factors Affecting Accuracy
-
-| Factor | Impact | Mitigation |
-|--------|--------|------------|
-| Board centering | High | Use live preview, two operators |
-| Measurement precision | High | Use laser distance meter |
-| Board rigidity | Medium | Use aluminum composite or thick foam board |
-| Yaw consistency | High | Calculate once, use for all |
-| Number of measurements | Medium | Take 7-10 measurements |
-
----
-
-## File Structure
+## Quick Reference
 
 ```
-project/
-├── intrinsic_calibration.py    # Intrinsic calibration module
-├── extrinsic_calibration.py    # Extrinsic calibration module
-├── camera_1_intrinsics.json    # Camera 1 intrinsic parameters
-├── camera_1_extrinsics.json    # Camera 1 extrinsic parameters
-├── camera_2_intrinsics.json    # Camera 2 intrinsic parameters
-├── camera_2_extrinsics.json    # Camera 2 extrinsic parameters
-└── README.md                   # This file
+PHASE 1 (once per vehicle):
+  [T2] Mark reference point on vehicle
+  [T2] Measure ref -> IMU offset with tape
+  [T1] Record imu_offset = [X, Y, Z]
+
+PHASE 2 (once per camera set):
+  [T2] Set up RTK, mark reference position
+  [T2] Walk to each spot, place RTK rover
+  [T1] Record ground X, Y for each position
+  [T2] Mark positions on ground
+
+PHASE 3 (per camera):
+  [T2] Measure ref -> camera with tape
+  [T1] Record camera_prior_position = [X, Y, Z]
+  [T1] Estimate camera_prior_orientation = [az, el, roll]
+
+PHASE 4 (per camera, per position):
+  [T2] Place board at mark, level, facing camera
+  [T2] Measure board center height -> T1 records
+  [T2] Measure laser distance -> T1 records
+  [T1] Verify 81 corners, capture image
+  [T1] Record INS yaw/pitch/roll
+
+PHASE 5:
+  [T1] Run calibration, verify specs, save JSON
 ```
 
 ---
 
-## Quick Reference Card
+## Usage
 
+### Setup Environment
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install opencv-contrib-python==4.8.1.78 "numpy<2"
+pip install scipy
 ```
-┌────────────────────────────────────────────────────────────────────┐
-│              EXTRINSIC CALIBRATION QUICK REFERENCE                 │
-├────────────────────────────────────────────────────────────────────┤
-│                                                                    │
-│  COORDINATE SYSTEM:                                                │
-│    X = Forward    Y = Right    Z = Up    Origin = IMU              │
-│                                                                    │
-│  TWO OPERATORS:                                                    │
-│    A = At board (position, measure, hold)                          │
-│    B = At monitor (guide, capture, record)                         │
-│                                                                    │
-│  PROCEDURE:                                                        │
-│    1. Center board in image (B guides A)                           │
-│    2. Measure position, calculate yaw                              │
-│    3. Capture image                                                │
-│    4. Move along optical axis (closer/further, up/down)            │
-│    5. Keep same yaw, re-center, measure, capture                   │
-│    6. Repeat for 7 positions total                                 │
-│                                                                    │
-│  CRITICAL:                                                         │
-│    ✓ Always center board in image                                  │
-│    ✓ Same yaw for all measurements                                 │
-│    ✓ Vary distance (3-7m) and height (±30cm)                       │
-│    ✗ Don't move board left/right of optical axis                   │
-│                                                                    │
-│  QUALITY CHECK:                                                    │
-│    Azimuth std < 1°     Elevation std < 1°     Reproj < 1.5px     │
-│                                                                    │
-└────────────────────────────────────────────────────────────────────┘
+
+### Intrinsic Calibration (once per camera)
+
+```bash
+# With real images
+python3 intrinsic_calibration.py --images intrinsic_images/ --output camera_intrinsics.json
+
+# Synthetic demo (no hardware)
+python3 intrinsic_calibration.py --synthetic --output demo_intrinsics.json
 ```
+
+### Extrinsic Calibration (once per installation)
+
+```bash
+# Demo mode (no hardware needed)
+python3 extrinsic_calibration.py --demo -n 5 -o demo_extrinsics.json
+
+# Demo with your intrinsics file
+python3 extrinsic_calibration.py --demo -i camera_intrinsics.json -n 5 -o camera_extrinsics.json
+```
+
+### View Results
+
+```bash
+cat demo_extrinsics.json
+```
+
+### Complete Demo Workflow (No Hardware Needed)
+
+```bash
+# Step 1: Generate synthetic intrinsics
+python3 intrinsic_calibration.py --synthetic -o demo_intrinsics.json
+
+# Step 2: Run extrinsic calibration demo
+python3 extrinsic_calibration.py --demo -i demo_intrinsics.json -n 5 -o demo_extrinsics.json
+
+# Step 3: Review results
+cat demo_extrinsics.json
+```
+
+### Demo vs Real Calibration
+
+| Step | Demo Mode | Real Calibration |
+|------|-----------|------------------|
+| Ground positions | Simulated (RTK ~1cm error) | Measured with RTK |
+| Board height | Simulated | Measured with laser/tape |
+| Board placement | Simulated | Operator places board |
+| Laser distance | Simulated (~2cm error) | Measured with laser |
+| IMU offset | Simulated (~15cm error) | Measured with tape |
+| INS | Simulated | Real INS data |
+| Images | Synthetic | Real camera images |

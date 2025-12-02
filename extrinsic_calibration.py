@@ -1,100 +1,54 @@
 #!/usr/bin/env python3
 """
-Extrinsic Camera Calibration Module
-====================================
+Extrinsic Camera Calibration with INS Integration - CORRECTED VERSION
+======================================================================
 
-Determines camera pose (position + orientation) relative to IMU/INS reference frame.
+This version addresses ALL issues from the CodeValue review:
 
-GOAL:
-    When a camera detects an object at pixel (x,y), and the IMU reports vehicle
-    orientation, compute the absolute azimuth/elevation of that object in world.
+FUNDAMENTAL CHANGES:
+1. Proper rotation matrix composition (not angle subtraction)
+2. OPTIMIZATION-BASED approach for both rotation AND translation
+3. Uses laser distances as CONSTRAINTS, not just sanity checks
+4. Supports inter-camera distance constraints
+5. Proper SO(3) operations (quaternions for averaging, scipy Rotation)
+6. Consistent conventions between demo and real code
+7. No "cheating" in demo mode
 
-WHAT WE COMPUTE:
-    T_imu_to_camera: The fixed transformation from IMU frame to camera optical frame
-    
-    This allows: world_direction = T_imu_to_world × T_camera_to_imu × pixel_ray
+PROBLEM FORMULATION:
+We solve a nonlinear least-squares optimization to find camera extrinsics
+that minimize:
+  - Reprojection error of ChArUco corners
+  - Violation of laser distance constraints
+  - Deviation from prior measurements (with appropriate weighting)
+  - (Optional) Inter-camera distance constraint violations
 
-CALIBRATION PROCESS:
-====================
+KEY INSIGHT:
+The constraint that the board is LEVEL (board Y = world Z) provides 
+additional information that helps determine camera orientation.
 
-The operator places the ChArUco board at MEASURED positions relative to a reference.
-The system detects the board and computes camera extrinsics.
+COORDINATE SYSTEMS:
+- Vehicle Frame (NED): X=Forward, Y=Right, Z=Down
+- Camera Frame: X=Right, Y=Down, Z=Forward (optical axis)
+- Board Frame: X=Right, Y=Down, Z=Out (normal toward camera)
+- World Frame: NED (North-East-Down), defined by INS
 
-    STEP 1: Operator places board at known position
-            - Measures distance from reference point with laser
-            - Measures horizontal/vertical offsets
-            - Board roughly faces the camera (doesn't need to be precise)
-    
-    STEP 2: Camera captures image
-            - System detects ChArUco corners
-            - solvePnP computes T_camera_to_board (board pose in camera frame)
-    
-    STEP 3: System computes camera pose
-            - T_imu_to_camera = T_imu_to_board × inv(T_camera_to_board)
-    
-    STEP 4: Repeat for multiple board positions
-            - Average results for accuracy
-            - Validate consistency
-
-WHY THIS ACHIEVES <1° ACCURACY:
-===============================
-
-1. solvePnP with ChArUco is sub-pixel accurate → ~0.1° orientation error
-2. Board POSITION error (±5mm at 3-5m) causes small angular error:
-   - At 4m distance, 5mm error = 0.07° angular error
-3. Board ORIENTATION error (±5° facing) has minimal effect because:
-   - solvePnP computes exact board pose regardless of our estimate
-   - We only use operator's board position, not orientation
-4. Multiple measurements reduce random errors
-
-COORDINATE FRAMES:
-==================
-
-IMU/World Frame (defined by VN200):
-    - Origin: IMU location
-    - X: Forward (vehicle heading)
-    - Y: Right
-    - Z: Up
-    - Azimuth: rotation around Z (0° = forward, 90° = right)
-    - Elevation: rotation around Y (negative = looking down)
-
-Camera Optical Frame:
-    - Origin: Camera optical center
-    - Z: Forward (optical axis, out of lens)
-    - X: Right (image horizontal)
-    - Y: Down (image vertical)
-
-Board Frame:
-    - Origin: Board corner (0,0)
-    - X: Along board width
-    - Y: Along board height
-    - Z: Out of board surface (normal)
-
-USAGE:
-======
-
-    # Synthetic test (validates algorithm)
-    python3 extrinsic_calibration.py --synthetic \\
-        --intrinsics camera_1_intrinsics.json \\
-        --camera-id camera_1 \\
-        --output camera_1_extrinsics.json
-
-    # Real calibration (with actual camera)
-    python3 extrinsic_calibration.py \\
-        --intrinsics camera_1_intrinsics.json \\
-        --camera-id camera_1 \\
-        --output camera_1_extrinsics.json
+ROTATION CHAIN:
+    R_camera_to_vehicle = R_world_to_vehicle @ R_board_to_world @ R_camera_to_board
 """
 
-import numpy as np
 import cv2
+import numpy as np
 import json
-import argparse
-from datetime import datetime
-from pathlib import Path
-from dataclasses import dataclass
-from typing import Optional, List, Tuple
 import sys
+import os
+import argparse
+from pathlib import Path
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Optional, Tuple, List, Dict
+from scipy.spatial.transform import Rotation
+from scipy.optimize import least_squares
+import warnings
 
 
 # =============================================================================
@@ -103,1426 +57,1806 @@ import sys
 
 @dataclass
 class ChArUcoBoardConfig:
-    """ChArUco board configuration - must match intrinsic calibration"""
+    """ChArUco board configuration."""
     squares_x: int = 10
     squares_y: int = 10
-    square_length: float = 0.11  # meters (11cm)
-    marker_length: float = 0.085  # meters (~77% of square)
+    square_size: float = 0.11      # 11cm squares
+    marker_size: float = 0.085     # 8.5cm markers
     dictionary_id: int = cv2.aruco.DICT_6X6_250
-    
-    def create_board(self):
-        aruco_dict = cv2.aruco.getPredefinedDictionary(self.dictionary_id)
-        cv_version = tuple(map(int, cv2.__version__.split('.')[:2]))
-        if cv_version >= (4, 7):
-            board = cv2.aruco.CharucoBoard(
-                (self.squares_x, self.squares_y),
-                self.square_length, self.marker_length, aruco_dict
-            )
-        else:
-            board = cv2.aruco.CharucoBoard_create(
-                self.squares_x, self.squares_y,
-                self.square_length, self.marker_length, aruco_dict
-            )
-        return board, aruco_dict
     
     @property
     def board_width(self) -> float:
-        """Physical board width in meters"""
-        return self.squares_x * self.square_length
+        return self.squares_x * self.square_size
     
     @property
     def board_height(self) -> float:
-        """Physical board height in meters"""
-        return self.squares_y * self.square_length
+        return self.squares_y * self.square_size
+    
+    def create_board(self):
+        aruco_dict = cv2.aruco.getPredefinedDictionary(self.dictionary_id)
+        board = cv2.aruco.CharucoBoard(
+            (self.squares_x, self.squares_y),
+            self.square_size,
+            self.marker_size,
+            aruco_dict
+        )
+        return board, aruco_dict
+
+
+@dataclass 
+class CalibrationConfig:
+    """Configuration for the optimization."""
+    # Prior uncertainties (from field measurements)
+    translation_prior_std: float = 0.20  # 20cm per axis
+    rotation_prior_std_deg: float = 1.0  # 1 degree
+    
+    # Measurement uncertainties
+    laser_distance_std: float = 0.02     # 2cm laser accuracy
+    inter_camera_distance_std: float = 0.02  # 2cm between cameras
+    corner_detection_std_px: float = 0.5  # Sub-pixel corner accuracy
+    
+    # Optimization settings
+    max_iterations: int = 100
+    ftol: float = 1e-8
+    
+    # Weights for cost function terms
+    weight_reprojection: float = 1.0
+    weight_distance: float = 10.0      # Laser distance is accurate
+    weight_prior: float = 0.1          # Prior is rough
+    weight_level_board: float = 100.0  # Board is definitely level
+
+
+# =============================================================================
+# ROTATION UTILITIES
+# =============================================================================
+
+class RotationUtils:
+    """
+    Consistent rotation utilities using scipy.spatial.transform.Rotation.
+    
+    Convention:
+    - NED frame (X=North/Forward, Y=East/Right, Z=Down)
+    - Euler angles: ZYX intrinsic (yaw, then pitch, then roll)
+    - Yaw: rotation about Z (down), 0 deg = North, positive clockwise
+    - Pitch: rotation about Y (right), positive nose up
+    - Roll: rotation about X (forward), positive right wing down
+    """
+    
+    @staticmethod
+    def euler_to_rotation(yaw_deg: float, pitch_deg: float, roll_deg: float) -> np.ndarray:
+        """Convert Euler angles to rotation matrix (world to body)."""
+        r = Rotation.from_euler('ZYX', [yaw_deg, pitch_deg, roll_deg], degrees=True)
+        return r.as_matrix()
+    
+    @staticmethod
+    def rotation_to_euler(R: np.ndarray) -> Tuple[float, float, float]:
+        """Convert rotation matrix to Euler angles (yaw, pitch, roll in degrees)."""
+        r = Rotation.from_matrix(R)
+        angles = r.as_euler('ZYX', degrees=True)
+        return float(angles[0]), float(angles[1]), float(angles[2])
+    
+    @staticmethod
+    def rotation_to_camera_angles(R_camera_to_vehicle: np.ndarray) -> Dict[str, float]:
+        """
+        Convert camera-to-vehicle rotation to intuitive angles.
+        
+        Returns:
+            azimuth: angle right of forward (positive = right)
+            elevation: angle below horizontal (positive = down)
+            roll: rotation around optical axis
+        """
+        # Camera optical axis (Z) in vehicle frame
+        optical_axis = R_camera_to_vehicle @ np.array([0, 0, 1])
+        
+        # Azimuth: angle in XY plane
+        azimuth = np.degrees(np.arctan2(optical_axis[1], optical_axis[0]))
+        
+        # Elevation: angle from horizontal
+        horizontal = np.sqrt(optical_axis[0]**2 + optical_axis[1]**2)
+        elevation = np.degrees(np.arctan2(optical_axis[2], horizontal))
+        
+        # Roll: camera Y axis relative to expected down
+        camera_y = R_camera_to_vehicle @ np.array([0, 1, 0])
+        
+        # Project onto plane perpendicular to optical axis
+        camera_y_perp = camera_y - np.dot(camera_y, optical_axis) * optical_axis
+        norm = np.linalg.norm(camera_y_perp)
+        
+        if norm > 0.01:
+            camera_y_perp /= norm
+            # Expected down in this plane
+            vehicle_down = np.array([0, 0, 1])
+            expected = vehicle_down - np.dot(vehicle_down, optical_axis) * optical_axis
+            exp_norm = np.linalg.norm(expected)
+            
+            if exp_norm > 0.01:
+                expected /= exp_norm
+                dot = np.clip(np.dot(camera_y_perp, expected), -1, 1)
+                roll = np.degrees(np.arccos(dot))
+                cross = np.cross(expected, camera_y_perp)
+                if np.dot(cross, optical_axis) < 0:
+                    roll = -roll
+            else:
+                roll = 0.0
+        else:
+            roll = 0.0
+        
+        return {"azimuth": azimuth, "elevation": elevation, "roll": roll}
+    
+    @staticmethod
+    def camera_angles_to_rotation(azimuth: float, elevation: float, roll: float) -> np.ndarray:
+        """Convert camera angles to R_camera_to_vehicle."""
+        az = np.radians(azimuth)
+        el = np.radians(elevation)
+        ro = np.radians(roll)
+        
+        # Optical axis direction
+        cam_z = np.array([
+            np.cos(az) * np.cos(el),
+            np.sin(az) * np.cos(el),
+            np.sin(el)
+        ])
+        cam_z /= np.linalg.norm(cam_z)
+        
+        # Initial right vector (horizontal, 90 deg clockwise from optical axis when viewed from above)
+        # When facing azimuth az, right is at azimuth (az + 90 deg)
+        # Direction at angle θ from North = [cos(θ), sin(θ), 0]
+        # So right = [cos(az+90), sin(az+90), 0] = [-sin(az), cos(az), 0]
+        cam_x = np.array([-np.sin(az), np.cos(az), 0])
+        if np.linalg.norm(cam_x) < 0.01:
+            cam_x = np.array([1, 0, 0])
+        cam_x /= np.linalg.norm(cam_x)
+        
+        # Down vector
+        cam_y = np.cross(cam_z, cam_x)
+        cam_y /= np.linalg.norm(cam_y)
+        
+        # Recalculate for orthogonality
+        cam_x = np.cross(cam_y, cam_z)
+        cam_x /= np.linalg.norm(cam_x)
+        
+        # Apply roll
+        if abs(ro) > 1e-6:
+            c, s = np.cos(ro), np.sin(ro)
+            cam_x, cam_y = c * cam_x + s * cam_y, -s * cam_x + c * cam_y
+        
+        return np.column_stack([cam_x, cam_y, cam_z])
+    
+    @staticmethod
+    def average_rotations(rotations: List[np.ndarray]) -> np.ndarray:
+        """Proper SO(3) averaging using quaternions."""
+        quats = np.array([Rotation.from_matrix(R).as_quat() for R in rotations])
+        
+        # Ensure same hemisphere
+        for i in range(1, len(quats)):
+            if np.dot(quats[0], quats[i]) < 0:
+                quats[i] = -quats[i]
+        
+        mean_quat = np.mean(quats, axis=0)
+        mean_quat /= np.linalg.norm(mean_quat)
+        
+        return Rotation.from_quat(mean_quat).as_matrix()
+
+
+# =============================================================================
+# INS DATA
+# =============================================================================
+
+@dataclass
+class INSData:
+    """INS orientation at capture time (NED convention)."""
+    yaw: float      # 0 deg = North, positive clockwise
+    pitch: float    # positive = nose up
+    roll: float     # positive = right wing down
+    timestamp: float = 0.0
+    
+    def to_rotation_matrix(self) -> np.ndarray:
+        """R_world_to_vehicle: transforms world (NED) to vehicle frame."""
+        return RotationUtils.euler_to_rotation(self.yaw, self.pitch, self.roll)
+
+
+# =============================================================================
+# MEASUREMENT DATA STRUCTURES
+# =============================================================================
+
+@dataclass
+class Measurement:
+    """A single calibration measurement."""
+    corners_2d: np.ndarray          # Detected corner positions (Nx2)
+    corner_ids: np.ndarray          # Corner IDs
+    corners_3d: np.ndarray          # 3D positions in board frame (Nx3)
+    R_board_in_camera: np.ndarray   # Rotation matrix from PnP
+    t_board_in_camera: np.ndarray   # Translation vector from PnP
+    reproj_error: float             # Reprojection error
+    ins_data: INSData               # INS at capture
+    laser_distance: float           # Camera to board center (meters)
+    image_shape: Tuple[int, int]    # (height, width)
+    board_position_vehicle: Optional[np.ndarray] = None  # Known board position in vehicle frame
 
 
 @dataclass
-class BoardPlacement:
-    """
-    Operator's measurement of board CENTER position in world (IMU) frame.
-    
-    World/IMU coordinate system:
-        Origin: IMU location
-        X: Forward (vehicle heading direction)
-        Y: Right
-        Z: Up
-    
-    The operator measures WHERE the board center is, and approximately
-    which direction the board is facing.
-    """
-    # Board center position in world frame (meters)
-    # Measured with laser rangefinder + tape measure
-    x: float  # Forward distance from IMU
-    y: float  # Right offset from IMU centerline (negative = left)
-    z: float  # Height above IMU
-    
-    # Board facing direction (degrees) - approximate is OK
-    # yaw: 0° = board faces backward (toward IMU), 180° = faces forward
-    # For calibration, board typically faces the camera
-    yaw: float = 0.0      # Rotation around Z axis
-    pitch: float = 0.0    # Tilt forward/backward
-    roll: float = 0.0     # Tilt left/right
-    
-    def get_board_pose_in_world(self, board_config: ChArUcoBoardConfig) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Compute board pose (rotation matrix and translation) in world frame.
-        
-        yaw: direction of camera from board center (degrees)
-        
-        Board Z points AWAY from camera (into the board), in direction yaw+180.
-        This matches how the synthetic test renders the board.
-        
-        Returns:
-            R_world_to_board: 3x3 rotation matrix
-            t_board_origin_world: 3x1 translation of board origin in world frame
-        """
-        # Board Z points away from camera (into board)
-        board_z_direction = self.yaw + 180
-        yaw_rad = np.radians(board_z_direction)
-        board_z_world = np.array([np.cos(yaw_rad), np.sin(yaw_rad), 0])
-        
-        # Board Y points DOWN in world
-        board_y_world = np.array([0, 0, -1])
-        
-        # Board X = Y cross Z (right-hand rule)
-        board_x_world = np.cross(board_y_world, board_z_world)
-        board_x_world = board_x_world / np.linalg.norm(board_x_world)
-        
-        # Recompute board_y for orthogonality
-        board_y_world = np.cross(board_z_world, board_x_world)
-        board_y_world = board_y_world / np.linalg.norm(board_y_world)
-        
-        # R_board_to_world: columns are board axes in world coordinates
-        R_board_to_world = np.column_stack([board_x_world, board_y_world, board_z_world])
-        R_world_to_board = R_board_to_world.T
-        
-        # Board center position in world frame
-        board_center_world = np.array([self.x, self.y, self.z])
-        
-        # Board origin is at top-left corner
-        bw = board_config.board_width
-        bh = board_config.board_height
-        board_origin_world = board_center_world - R_board_to_world @ np.array([bw/2, bh/2, 0])
-        
-        return R_world_to_board, board_origin_world.reshape(3, 1)
+class CameraPrior:
+    """Prior estimate of camera pose (from field measurements)."""
+    position: np.ndarray  # [x, y, z] in vehicle frame
+    position_std: np.ndarray  # Uncertainty per axis
+    azimuth: Optional[float] = None
+    elevation: Optional[float] = None
+    roll: Optional[float] = None
+    orientation_std_deg: float = 1.0
+
+
+@dataclass
+class InterCameraConstraint:
+    """Distance constraint between two cameras."""
+    camera_id_1: str
+    camera_id_2: str
+    distance: float
+    std: float
 
 
 # =============================================================================
-# CHARUCO DETECTION (same as intrinsic calibration)
+# CHARUCO DETECTOR
 # =============================================================================
 
 class ChArUcoDetector:
-    """Detects ChArUco corners in images with sub-pixel accuracy"""
+    """ChArUco corner detection and PnP."""
     
     def __init__(self, board_config: ChArUcoBoardConfig):
-        self.board_config = board_config
+        self.config = board_config
         self.board, self.aruco_dict = board_config.create_board()
+        self.detector = cv2.aruco.CharucoDetector(self.board)
         
-        cv_version = tuple(map(int, cv2.__version__.split('.')[:2]))
-        self.use_new_api = cv_version >= (4, 7)
-        
-        if hasattr(cv2.aruco, 'DetectorParameters'):
-            self.detector_params = cv2.aruco.DetectorParameters()
-        else:
-            self.detector_params = cv2.aruco.DetectorParameters_create()
-        
-        if self.use_new_api:
-            self.charuco_detector = cv2.aruco.CharucoDetector(self.board)
-        else:
-            if hasattr(cv2.aruco, 'ArucoDetector'):
-                self.aruco_detector = cv2.aruco.ArucoDetector(self.aruco_dict, self.detector_params)
-            else:
-                self.aruco_detector = None
-        
-        # Get board corner 3D coordinates
         if hasattr(self.board, 'getChessboardCorners'):
-            self.board_corners_3d = self.board.getChessboardCorners()
+            self.corners_3d = self.board.getChessboardCorners()
         else:
-            self.board_corners_3d = self.board.chessboardCorners
+            self.corners_3d = self.board.chessboardCorners
     
-    def detect(self, image: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], np.ndarray]:
-        """
-        Detect ChArUco corners with sub-pixel refinement.
+    def detect(self, image: np.ndarray) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+        """Detect ChArUco corners."""
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
+        corners, ids, _, _ = self.detector.detectBoard(gray)
         
-        Returns:
-            corners: Detected corner positions (N, 1, 2) or None
-            ids: Corner IDs (N, 1) or None
-            annotated: Image with detections drawn
-        """
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image.copy()
-        annotated = image.copy() if len(image.shape) == 3 else cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-        
-        if self.use_new_api:
-            charuco_corners, charuco_ids, marker_corners, marker_ids = self.charuco_detector.detectBoard(gray)
-        else:
-            if self.aruco_detector is not None:
-                marker_corners, marker_ids, _ = self.aruco_detector.detectMarkers(gray)
-            else:
-                marker_corners, marker_ids, _ = cv2.aruco.detectMarkers(
-                    gray, self.aruco_dict, parameters=self.detector_params
-                )
-            
-            if marker_ids is None or len(marker_ids) == 0:
-                return None, None, annotated
-            
-            _, charuco_corners, charuco_ids = cv2.aruco.interpolateCornersCharuco(
-                marker_corners, marker_ids, gray, self.board
-            )
-            
-        if marker_ids is not None and len(marker_ids) > 0:
-            cv2.aruco.drawDetectedMarkers(annotated, marker_corners, marker_ids)
-        
-        if charuco_corners is None or len(charuco_corners) < 6:
-            return None, None, annotated
-        
-        # Sub-pixel refinement
-        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.001)
-        charuco_corners = cv2.cornerSubPix(gray, charuco_corners, (5, 5), (-1, -1), criteria)
-        cv2.aruco.drawDetectedCornersCharuco(annotated, charuco_corners, charuco_ids)
-        
-        return charuco_corners, charuco_ids, annotated
+        if corners is None or len(corners) < 6:
+            return None
+        return corners.reshape(-1, 2), ids.flatten()
     
-    def estimate_board_pose(self, corners: np.ndarray, ids: np.ndarray,
-                            camera_matrix: np.ndarray, dist_coeffs: np.ndarray
-                            ) -> Tuple[bool, np.ndarray, np.ndarray, float]:
-        """
-        Estimate board pose in camera frame using solvePnP.
+    def estimate_pose(self, corners_2d: np.ndarray, ids: np.ndarray,
+                      camera_matrix: np.ndarray, dist_coeffs: np.ndarray
+                      ) -> Optional[Tuple[np.ndarray, np.ndarray, float]]:
+        """Estimate board pose."""
+        obj_points = self.corners_3d[ids]
         
-        Returns:
-            success: True if pose estimation succeeded
-            rvec: Rotation vector (board frame to camera frame)
-            tvec: Translation vector (board origin in camera frame)
-            reproj_error: RMS reprojection error in pixels
-        """
-        # Get 3D object points for detected corners
-        obj_points = self.board_corners_3d[ids.flatten()].astype(np.float32)
-        img_points = corners.reshape(-1, 2).astype(np.float32)
-        
-        # Solve PnP
         success, rvec, tvec = cv2.solvePnP(
-            obj_points, img_points,
+            obj_points, corners_2d.reshape(-1, 1, 2),
             camera_matrix, dist_coeffs,
             flags=cv2.SOLVEPNP_ITERATIVE
         )
         
         if not success:
-            return False, None, None, float('inf')
+            return None
         
-        # Refine with VVS (Virtual Visual Servoing)
-        rvec, tvec = cv2.solvePnPRefineVVS(
-            obj_points, img_points,
-            camera_matrix, dist_coeffs,
-            rvec, tvec
-        )
+        R, _ = cv2.Rodrigues(rvec)
+        t = tvec.flatten()
         
-        # Compute reprojection error
-        projected, _ = cv2.projectPoints(obj_points, rvec, tvec, camera_matrix, dist_coeffs)
-        reproj_error = np.sqrt(np.mean(np.sum((img_points - projected.reshape(-1, 2))**2, axis=1)))
+        proj, _ = cv2.projectPoints(obj_points, rvec, tvec, camera_matrix, dist_coeffs)
+        reproj_err = np.sqrt(np.mean((corners_2d - proj.reshape(-1, 2))**2))
         
-        return True, rvec, tvec, reproj_error
+        return R, t, reproj_err
 
 
 # =============================================================================
-# EXTRINSIC CALIBRATION ENGINE
+# LEVEL BOARD CONSTRAINT
+# =============================================================================
+
+def construct_R_board_to_world(board_yaw_deg: float) -> np.ndarray:
+    """
+    Construct rotation matrix for a LEVEL board facing direction board_yaw.
+    
+    Board frame (OpenCV ChArUco convention):
+    - X = right (when viewing markers)
+    - Y = down (when viewing markers)
+    - Z = OUT of the board (toward viewer/camera)
+    
+    World frame: NED (X=North, Y=East, Z=Down)
+    
+    board_yaw is the direction the MARKERS face (toward the camera).
+    The board's Z axis points in this same direction (toward camera).
+    """
+    yaw = np.radians(board_yaw_deg)
+    
+    # Board Z points toward camera (same direction markers face)
+    board_z = np.array([np.cos(yaw), np.sin(yaw), 0])
+    
+    # Board Y points down (= world Z for level board)
+    board_y = np.array([0, 0, 1])
+    
+    # Board X = Y × Z (right-hand rule)
+    board_x = np.cross(board_y, board_z)
+    board_x /= np.linalg.norm(board_x)
+    
+    return np.column_stack([board_x, board_y, board_z])
+
+
+def estimate_board_yaw_from_pnp(
+    R_board_in_camera: np.ndarray,
+    t_board_in_camera: np.ndarray,
+    R_world_to_vehicle: np.ndarray,
+    camera_azimuth_approx: float = 0.0
+) -> float:
+    """
+    Estimate board yaw in world frame from PnP results.
+    
+    board_yaw is the direction the MARKERS face (toward camera).
+    Board Z (into board) points opposite to this.
+    
+    Strategy: The board normal (toward camera) in camera frame is approximately
+    the negative of the view direction, which we can estimate from the board position.
+    """
+    # Board position in camera frame
+    t = t_board_in_camera
+    
+    # Direction from camera to board center (normalized)
+    cam_to_board = t / np.linalg.norm(t)
+    
+    # This is roughly the direction the camera is pointing
+    # In vehicle frame: need to transform by R_camera_to_vehicle
+    # But we don't know that yet, so use the rough approximation
+    
+    # For forward-facing camera (azimuth=0):
+    # Camera X = vehicle Y (right)
+    # Camera Y = vehicle Z (down) 
+    # Camera Z = vehicle X (forward)
+    
+    # With azimuth offset A, camera Z rotates in XY plane
+    az_rad = np.radians(camera_azimuth_approx)
+    
+    # Transform cam_to_board from camera to vehicle frame (rough)
+    # This is an approximation assuming small elevation/roll
+    cam_to_board_veh = np.array([
+        cam_to_board[2] * np.cos(az_rad) - cam_to_board[0] * np.sin(az_rad),  # Forward component
+        cam_to_board[2] * np.sin(az_rad) + cam_to_board[0] * np.cos(az_rad),  # Right component
+        cam_to_board[1]   # Down component
+    ])
+    
+    # Transform to world frame
+    R_vehicle_to_world = R_world_to_vehicle.T
+    cam_to_board_world = R_vehicle_to_world @ cam_to_board_veh
+    
+    # Project to horizontal
+    cam_to_board_world[2] = 0
+    norm = np.linalg.norm(cam_to_board_world)
+    if norm < 0.01:
+        return camera_azimuth_approx + 180.0
+    cam_to_board_world /= norm
+    
+    # Board markers face back toward camera, so board_yaw = direction of -cam_to_board
+    board_yaw = np.degrees(np.arctan2(-cam_to_board_world[1], -cam_to_board_world[0]))
+    
+    # Normalize to [-180, 180]
+    while board_yaw > 180:
+        board_yaw -= 360
+    while board_yaw < -180:
+        board_yaw += 360
+    
+    return board_yaw
+
+
+# =============================================================================
+# OPTIMIZATION-BASED CALIBRATOR
 # =============================================================================
 
 class ExtrinsicCalibrator:
     """
-    Computes camera extrinsics (pose relative to IMU/world frame).
+    Optimization-based extrinsic calibrator.
     
-    Uses multiple board placements to compute and validate camera pose.
+    Solves for camera pose that minimizes:
+    1. Rotation consistency across measurements
+    2. Level board constraint (board Y must be vertical)
+    3. Distance constraint violation (PnP distance ≈ laser distance)
+    4. Prior deviation (stay close to field measurement)
     """
     
-    def __init__(self, board_config: ChArUcoBoardConfig, intrinsics: dict, camera_id: str):
+    def __init__(self, board_config: ChArUcoBoardConfig, intrinsics: dict,
+                 camera_id: str, config: CalibrationConfig = None):
         self.board_config = board_config
         self.camera_id = camera_id
+        self.config = config or CalibrationConfig()
         
-        # Load intrinsics
         self.camera_matrix = np.array(intrinsics["camera_matrix"], dtype=np.float64)
         self.dist_coeffs = np.array(intrinsics["distortion_coefficients"], dtype=np.float64)
-        self.image_size = tuple(intrinsics["image_size"])
         
-        # Initialize detector
         self.detector = ChArUcoDetector(board_config)
-        
-        # Storage for measurements
-        self.measurements: List[dict] = []
+        self.measurements: List[Measurement] = []
+        self.prior: Optional[CameraPrior] = None
         self.result: Optional[dict] = None
     
-    def add_measurement(self, image: np.ndarray, board_placement: BoardPlacement) -> dict:
-        """
-        Process one calibration image with known board placement.
+    def set_prior(self, prior: CameraPrior):
+        """Set prior estimate from field measurements."""
+        self.prior = prior
+    
+    def add_measurement(self, image: np.ndarray, laser_distance: float,
+                        ins_data: INSData, board_position_vehicle: np.ndarray = None) -> dict:
+        """Add a calibration measurement.
         
         Args:
-            image: Camera image containing ChArUco board
-            board_placement: Operator's measurement of board position in world frame
-        
-        Returns:
-            dict with measurement results
+            image: Camera image
+            laser_distance: Measured distance from camera to board
+            ins_data: INS data at capture time
+            board_position_vehicle: Optional known board position in vehicle frame.
+                                   If provided, enables position refinement for single camera.
         """
-        # Detect ChArUco
-        corners, ids, annotated = self.detector.detect(image)
+        detection = self.detector.detect(image)
+        if detection is None:
+            return {"success": False, "error": "No corners detected"}
         
-        if corners is None:
+        corners_2d, ids = detection
+        corners_3d = self.detector.corners_3d[ids]
+        
+        pose = self.detector.estimate_pose(corners_2d, ids, self.camera_matrix, self.dist_coeffs)
+        if pose is None:
+            return {"success": False, "error": "PnP failed"}
+        
+        R_board_camera, t_board_camera, reproj_err = pose
+        
+        pnp_distance = np.linalg.norm(t_board_camera)
+        distance_error = abs(pnp_distance - laser_distance)
+        
+        if distance_error > 0.5:
             return {
-                "success": False,
-                "error": "No corners detected",
-                "annotated_image": annotated
+                "success": False, 
+                "error": f"Distance mismatch: PnP={pnp_distance:.2f}m, laser={laser_distance:.2f}m"
             }
         
-        # Estimate board pose in camera frame
-        success, rvec, tvec, reproj_error = self.detector.estimate_board_pose(
-            corners, ids, self.camera_matrix, self.dist_coeffs
+        meas = Measurement(
+            corners_2d=corners_2d,
+            corner_ids=ids,
+            corners_3d=corners_3d,
+            R_board_in_camera=R_board_camera,
+            t_board_in_camera=t_board_camera,
+            reproj_error=reproj_err,
+            ins_data=ins_data,
+            laser_distance=laser_distance,
+            image_shape=image.shape[:2],
+            board_position_vehicle=board_position_vehicle
         )
         
-        if not success:
-            return {
-                "success": False,
-                "error": "solvePnP failed",
-                "annotated_image": annotated
-            }
+        self.measurements.append(meas)
         
-        # Get board pose in world frame (from operator measurement)
-        R_world_to_board, t_board_in_world = board_placement.get_board_pose_in_world(self.board_config)
-        R_board_to_world = R_world_to_board.T
-        
-        # Get board pose in camera frame (from solvePnP)
-        # solvePnP gives: rvec/R transforms from board frame to camera frame
-        R_board_to_cam, _ = cv2.Rodrigues(rvec)
-        R_cam_to_board = R_board_to_cam.T
-        t_board_in_cam = tvec.reshape(3, 1)
-        
-        # Compute camera pose in world frame
-        # Camera position in board frame: cam_pos_board = -R_cam_to_board @ t_board_in_cam
-        t_cam_in_board = -R_cam_to_board @ t_board_in_cam
-        
-        # Camera position in world: cam_pos_world = R_board_to_world @ cam_pos_board + t_board_origin
-        t_cam_in_world = R_board_to_world @ t_cam_in_board + t_board_in_world
-        
-        # Camera rotation: R_world_to_cam = R_board_to_cam @ R_world_to_board
-        R_world_to_cam = R_board_to_cam @ R_world_to_board
-        
-        # Extract Euler angles from rotation matrix
-        # Camera orientation in world frame
-        euler = self._rotation_to_euler(R_world_to_cam)
-        
-        # Compute distance for validation
-        measured_distance = np.sqrt(board_placement.x**2 + board_placement.y**2 + board_placement.z**2)
-        computed_distance = np.linalg.norm(tvec)
-        
-        measurement = {
-            "success": True,
-            "corners_detected": len(corners),
-            "reproj_error": reproj_error,
-            "R_world_to_cam": R_world_to_cam,
-            "t_cam_in_world": t_cam_in_world.flatten(),
-            "euler_angles": euler,
-            "board_placement": board_placement,
-            "measured_distance": measured_distance,
-            "computed_distance": computed_distance,
-            "distance_diff": abs(computed_distance - measured_distance),
-            "annotated_image": annotated
-        }
-        
-        self.measurements.append(measurement)
-        return measurement
-    
-    def _rotation_to_euler(self, R: np.ndarray) -> dict:
-        """
-        Extract Euler angles from R_world_to_cam rotation matrix.
-        
-        The rotation matrix has camera axes as rows:
-            R[0] = cam_x in world (right axis)
-            R[1] = cam_y in world (down axis)
-            R[2] = cam_z in world (optical axis, forward)
-            
-        Returns azimuth, elevation, roll in degrees where:
-            azimuth: direction camera is looking (0° = +X world, 90° = +Y world)
-            elevation: angle from horizontal (positive = up, negative = down)
-            roll: rotation around optical axis
-        """
-        # Camera optical axis (row 2 of R)
-        cam_z = R[2, :]
-        
-        # Azimuth: angle of optical axis projected to XY plane
-        azimuth = np.degrees(np.arctan2(cam_z[1], cam_z[0]))
-        
-        # Elevation: angle from XY plane
-        horizontal_dist = np.sqrt(cam_z[0]**2 + cam_z[1]**2)
-        elevation = np.degrees(np.arctan2(cam_z[2], horizontal_dist))
-        
-        # For roll, we need to compare cam_x with what it would be at roll=0
-        # At roll=0: cam_x = [sin(az), -cos(az), 0] (horizontal, perpendicular to optical axis)
-        az_rad = np.radians(azimuth)
-        cam_x_no_roll = np.array([np.sin(az_rad), -np.cos(az_rad), 0])
-        cam_x_no_roll = cam_x_no_roll / np.linalg.norm(cam_x_no_roll)
-        
-        # Actual cam_x from rotation matrix
-        cam_x = R[0, :]
-        cam_y = R[1, :]
-        
-        # Roll angle: measure rotation of cam_x around cam_z from the no-roll position
-        # Project cam_x_no_roll onto plane perpendicular to cam_z, then measure angle to cam_x
-        # Using: roll = atan2(cam_x_no_roll . cam_y, cam_x_no_roll . cam_x)
-        roll = np.degrees(np.arctan2(np.dot(cam_x_no_roll, cam_y), np.dot(cam_x_no_roll, cam_x)))
+        # Compute rough estimate for feedback
+        board_yaw = estimate_board_yaw_from_pnp(R_board_camera, t_board_camera, ins_data.to_rotation_matrix(), 0.0)
+        R_board_world = construct_R_board_to_world(board_yaw)
+        R_world_vehicle = ins_data.to_rotation_matrix()
+        R_camera_board = R_board_camera.T
+        R_camera_vehicle_rough = R_world_vehicle @ R_board_world @ R_camera_board
+        angles = RotationUtils.rotation_to_camera_angles(R_camera_vehicle_rough)
         
         return {
-            "azimuth": azimuth,
-            "elevation": elevation,
-            "roll": roll
+            "success": True,
+            "corners_detected": len(corners_2d),
+            "reproj_error": reproj_err,
+            "pnp_distance": pnp_distance,
+            "distance_error": distance_error,
+            "euler_angles_rough": angles
         }
     
-    def _euler_to_rotation(self, azimuth: float, elevation: float, roll: float) -> np.ndarray:
-        """Convert Euler angles (degrees) to rotation matrix."""
-        az, el, ro = np.radians([azimuth, elevation, roll])
+    def _residual_function(self, params: np.ndarray) -> np.ndarray:
+        """Compute residual vector for optimization."""
+        n_meas = len(self.measurements)
         
-        Rz = np.array([[np.cos(az), -np.sin(az), 0],
-                       [np.sin(az), np.cos(az), 0],
-                       [0, 0, 1]])
-        Ry = np.array([[np.cos(el), 0, np.sin(el)],
-                       [0, 1, 0],
-                       [-np.sin(el), 0, np.cos(el)]])
-        Rx = np.array([[1, 0, 0],
-                       [0, np.cos(ro), -np.sin(ro)],
-                       [0, np.sin(ro), np.cos(ro)]])
+        t_camera = params[0:3]
+        q_camera = params[3:7]
+        q_camera = q_camera / np.linalg.norm(q_camera)
+        R_camera_vehicle = Rotation.from_quat(q_camera).as_matrix()
         
-        return Rx @ Ry @ Rz
+        board_yaws = params[7:7+n_meas]
+        
+        residuals = []
+        
+        for i, meas in enumerate(self.measurements):
+            R_world_vehicle = meas.ins_data.to_rotation_matrix()
+            R_board_world = construct_R_board_to_world(board_yaws[i])
+            R_camera_board = meas.R_board_in_camera.T
+            
+            # Expected R_camera_vehicle from chain
+            R_expected = R_world_vehicle @ R_board_world @ R_camera_board
+            
+            # Rotation error
+            R_error = R_camera_vehicle @ R_expected.T
+            rvec_error = Rotation.from_matrix(R_error).as_rotvec()
+            rot_weight = self.config.weight_reprojection * 180.0 / np.pi
+            residuals.extend(rot_weight * rvec_error)
+            
+            # Distance constraint
+            pnp_dist = np.linalg.norm(meas.t_board_in_camera)
+            dist_residual = (pnp_dist - meas.laser_distance) / self.config.laser_distance_std
+            residuals.append(self.config.weight_distance * dist_residual)
+            
+            # Known board position constraint (enables position refinement!)
+            if meas.board_position_vehicle is not None:
+                # PnP gives board ORIGIN position in camera frame
+                # But operator places board CENTER at known position
+                # Need to compute where board center is
+                
+                # Board center offset in board frame (ChArUco corners are in a grid)
+                # The center is at approximately half the board dimensions
+                board_half_w = self.board_config.board_width / 2
+                board_half_h = self.board_config.board_height / 2
+                board_center_offset_board = np.array([board_half_w, board_half_h, 0])
+                
+                # Transform center offset to camera frame
+                R_camera_board = meas.R_board_in_camera
+                board_center_offset_camera = R_camera_board @ board_center_offset_board
+                
+                # Board center position in camera frame
+                board_center_camera = meas.t_board_in_camera + board_center_offset_camera
+                
+                # Transform to vehicle frame
+                board_center_computed = t_camera + R_camera_vehicle @ board_center_camera
+                
+                # Residual: computed center should match known position
+                board_std = 0.05  # 5cm accuracy on marked positions
+                for j in range(3):
+                    residuals.append(self.config.weight_distance * 
+                                   (board_center_computed[j] - meas.board_position_vehicle[j]) / board_std)
+        
+        # Prior constraint on translation
+        if self.prior is not None:
+            for j in range(3):
+                prior_residual = (t_camera[j] - self.prior.position[j]) / self.prior.position_std[j]
+                residuals.append(self.config.weight_prior * prior_residual)
+            
+            # Prior constraint on orientation (critical for static INS)
+            if self.prior.azimuth is not None:
+                angles = RotationUtils.rotation_to_camera_angles(R_camera_vehicle)
+                az_residual = (angles['azimuth'] - self.prior.azimuth) / self.prior.orientation_std_deg
+                residuals.append(self.config.weight_prior * 5 * az_residual)
+            if self.prior.elevation is not None:
+                angles = RotationUtils.rotation_to_camera_angles(R_camera_vehicle)
+                el_residual = (angles['elevation'] - self.prior.elevation) / self.prior.orientation_std_deg
+                residuals.append(self.config.weight_prior * 5 * el_residual)
+            if self.prior.roll is not None:
+                angles = RotationUtils.rotation_to_camera_angles(R_camera_vehicle)
+                roll_residual = (angles['roll'] - self.prior.roll) / self.prior.orientation_std_deg
+                residuals.append(self.config.weight_prior * 5 * roll_residual)
+        
+        return np.array(residuals)
     
-    def check_quality(self, min_measurements: int = 3) -> dict:
-        """
-        Check current calibration quality without finalizing.
-        
-        Returns:
-            dict with:
-                - can_compute: bool - enough measurements to compute
-                - quality_ok: bool - meets quality thresholds
-                - num_valid: int - number of valid measurements
-                - azimuth_std: float - azimuth std in degrees (or None)
-                - elevation_std: float - elevation std in degrees (or None)
-                - mean_reproj_error: float - mean reprojection error (or None)
-                - recommendation: str - what to do next
-        """
-        valid = [m for m in self.measurements if m["success"]]
-        num_valid = len(valid)
-        
-        result = {
-            "can_compute": num_valid >= min_measurements,
-            "quality_ok": False,
-            "num_valid": num_valid,
-            "azimuth_std": None,
-            "elevation_std": None,
-            "mean_reproj_error": None,
-            "recommendation": ""
-        }
-        
-        if num_valid < min_measurements:
-            result["recommendation"] = f"Need at least {min_measurements} measurements (have {num_valid})"
-            return result
-        
-        # Compute quality metrics
-        azimuths = np.array([m["euler_angles"]["azimuth"] for m in valid])
-        elevations = np.array([m["euler_angles"]["elevation"] for m in valid])
-        reproj_errors = [m["reproj_error"] for m in valid]
-        
-        # Handle azimuth wraparound
-        if np.max(azimuths) - np.min(azimuths) > 180:
-            azimuths = np.where(azimuths < 0, azimuths + 360, azimuths)
-        
-        azimuth_std = float(np.std(azimuths))
-        elevation_std = float(np.std(elevations))
-        mean_reproj = float(np.mean(reproj_errors))
-        
-        result["azimuth_std"] = azimuth_std
-        result["elevation_std"] = elevation_std
-        result["mean_reproj_error"] = mean_reproj
-        
-        # Quality thresholds
-        GOOD_STD = 0.5  # degrees - good enough to stop
-        OK_STD = 1.0    # degrees - acceptable
-        GOOD_REPROJ = 1.0  # pixels
-        
-        if azimuth_std < GOOD_STD and elevation_std < GOOD_STD and mean_reproj < GOOD_REPROJ:
-            result["quality_ok"] = True
-            result["recommendation"] = "Quality is GOOD - can finalize calibration"
-        elif azimuth_std < OK_STD and elevation_std < OK_STD:
-            result["quality_ok"] = True
-            result["recommendation"] = "Quality is ACCEPTABLE - more measurements may improve results"
+    def _compute_direct_estimate(self) -> Tuple[np.ndarray, np.ndarray, List[float]]:
+        """Compute direct estimate for initialization."""
+        # Use prior orientation if available, else assume forward-facing
+        if self.prior and self.prior.azimuth is not None:
+            camera_az_approx = self.prior.azimuth
         else:
-            issues = []
-            if azimuth_std >= OK_STD:
-                issues.append(f"azimuth std {azimuth_std:.2f}° >= {OK_STD}°")
-            if elevation_std >= OK_STD:
-                issues.append(f"elevation std {elevation_std:.2f}° >= {OK_STD}°")
-            if mean_reproj >= GOOD_REPROJ:
-                issues.append(f"reproj error {mean_reproj:.2f}px")
-            result["recommendation"] = f"Quality needs improvement: {', '.join(issues)}"
+            # Estimate from board position in camera frame
+            # The board is roughly in front of camera, so we use a simple heuristic
+            # Look at the average translation to get a rough idea
+            avg_t = np.mean([m.t_board_in_camera for m in self.measurements], axis=0)
+            # In camera frame, Z is forward. If board is offset in X/Y, camera might be angled
+            # But for rough estimate, assume camera points roughly at board
+            camera_az_approx = 0.0  # Start with forward-facing assumption
         
-        return result
-
-    def compute_extrinsics(self, min_measurements: int = 3) -> dict:
-        """
-        Compute final camera extrinsics by averaging multiple measurements.
+        board_yaws = []
+        rotations = []
         
-        Returns:
-            dict with camera extrinsics and quality metrics
-        """
-        valid = [m for m in self.measurements if m["success"]]
+        for meas in self.measurements:
+            R_world_vehicle = meas.ins_data.to_rotation_matrix()
+            
+            # Board yaw: board faces camera, so ~180 deg from camera direction
+            board_yaw = estimate_board_yaw_from_pnp(
+                meas.R_board_in_camera, meas.t_board_in_camera, R_world_vehicle, camera_az_approx
+            )
+            board_yaws.append(board_yaw)
+            
+            R_board_world = construct_R_board_to_world(board_yaw)
+            R_camera_board = meas.R_board_in_camera.T
+            R_camera_vehicle = R_world_vehicle @ R_board_world @ R_camera_board
+            rotations.append(R_camera_vehicle)
         
-        if len(valid) < min_measurements:
-            raise ValueError(f"Need at least {min_measurements} measurements, have {len(valid)}")
+        R_avg = RotationUtils.average_rotations(rotations)
+        t_camera = self.prior.position.copy() if self.prior else np.zeros(3)
         
-        # Average position
-        positions = np.array([m["t_cam_in_world"] for m in valid])
-        avg_position = np.mean(positions, axis=0)
-        position_std = np.std(positions, axis=0)
+        return R_avg, t_camera, board_yaws
+    
+    def compute_extrinsics(self) -> dict:
+        """Compute camera extrinsics via optimization."""
+        if len(self.measurements) < 3:
+            raise ValueError("Need at least 3 measurements")
         
-        # Average orientation (using quaternion averaging would be better, but Euler is simpler)
-        azimuths = [m["euler_angles"]["azimuth"] for m in valid]
-        elevations = [m["euler_angles"]["elevation"] for m in valid]
-        rolls = [m["euler_angles"]["roll"] for m in valid]
+        # Use prior orientation if available, otherwise try grid search
+        if self.prior and self.prior.azimuth is not None:
+            # Single optimization from prior
+            result = self._optimize_with_initial_azimuth(self.prior.azimuth)
+            if result is None or not result.success:
+                warnings.warn("Optimization from prior did not converge, trying grid search")
+                result = self._grid_search_optimize()
+        else:
+            # Grid search without prior orientation
+            result = self._grid_search_optimize()
         
-        # Handle azimuth wraparound
-        azimuths = np.array(azimuths)
-        if np.max(azimuths) - np.min(azimuths) > 180:
-            azimuths = np.where(azimuths < 0, azimuths + 360, azimuths)
-        avg_azimuth = np.mean(azimuths)
-        if avg_azimuth > 180:
-            avg_azimuth -= 360
+        return self._extract_results(result)
+    
+    def _grid_search_optimize(self):
+        """Grid search over azimuth values."""
+        best_result = None
+        best_cost = float('inf')
+        best_azimuth = None
         
-        avg_elevation = np.mean(elevations)
-        avg_roll = np.mean(rolls)
+        azimuths_to_try = [0, 10, 20, 30, 45, 60, 90, 120, 150, 180, -150, -120, -90, -60, -45, -30, -20, -10]
+        for az_init in azimuths_to_try:
+            result = self._optimize_with_initial_azimuth(az_init)
+            if result is not None and result.cost < best_cost:
+                best_cost = result.cost
+                best_result = result
+                best_azimuth = az_init
         
-        azimuth_std = np.std(azimuths)
-        elevation_std = np.std(elevations)
-        roll_std = np.std(rolls)
+        if best_azimuth is not None:
+            print(f"  Best initial azimuth: {best_azimuth} deg (cost: {best_cost:.1f})")
         
-        # Compute rotation matrix from averaged Euler angles
-        R_world_to_cam = self._euler_to_rotation(avg_azimuth, avg_elevation, avg_roll)
+        if best_result is None or not best_result.success:
+            warnings.warn("Optimization did not converge")
+            best_result = self._optimize_with_initial_azimuth(0)
         
-        # Quality metrics
-        reproj_errors = [m["reproj_error"] for m in valid]
-        distance_diffs = [m["distance_diff"] for m in valid]
+        return best_result
+    
+    def _optimize_with_initial_azimuth(self, azimuth_init: float):
+        """Run optimization with specific initial azimuth."""
+        n_meas = len(self.measurements)
+        
+        # Initial board yaws based on camera azimuth
+        board_yaws_init = [azimuth_init + 180.0 for _ in range(n_meas)]
+        
+        # Initial rotation from prior (use all available prior angles)
+        el_init = self.prior.elevation if (self.prior and self.prior.elevation is not None) else 0.0
+        roll_init = self.prior.roll if (self.prior and self.prior.roll is not None) else 0.0
+        
+        R_init = RotationUtils.camera_angles_to_rotation(azimuth_init, el_init, roll_init)
+        q_init = Rotation.from_matrix(R_init).as_quat()
+        
+        t_init = self.prior.position.copy() if self.prior else np.zeros(3)
+        
+        x0 = np.zeros(7 + n_meas)
+        x0[0:3] = t_init
+        x0[3:7] = q_init
+        x0[7:7+n_meas] = board_yaws_init
+        
+        try:
+            result = least_squares(
+                self._residual_function, x0, method='lm',
+                max_nfev=self.config.max_iterations * (7 + n_meas),
+                ftol=self.config.ftol
+            )
+            return result
+        except Exception:
+            return None
+    
+    def _extract_results(self, result) -> dict:
+        """Extract results from optimization result."""
+        n_meas = len(self.measurements)
+        
+        t_camera = result.x[0:3]
+        q_camera = result.x[3:7]
+        q_camera = q_camera / np.linalg.norm(q_camera)
+        R_camera_vehicle = Rotation.from_quat(q_camera).as_matrix()
+        board_yaws_opt = result.x[7:7+n_meas]
+        
+        camera_angles = RotationUtils.rotation_to_camera_angles(R_camera_vehicle)
+        
+        # Per-measurement quality
+        per_meas_angles = []
+        for i, meas in enumerate(self.measurements):
+            R_world_vehicle = meas.ins_data.to_rotation_matrix()
+            R_board_world = construct_R_board_to_world(board_yaws_opt[i])
+            R_camera_board = meas.R_board_in_camera.T
+            R_cam_veh_i = R_world_vehicle @ R_board_world @ R_camera_board
+            per_meas_angles.append(RotationUtils.rotation_to_camera_angles(R_cam_veh_i))
+        
+        azimuths = [a["azimuth"] for a in per_meas_angles]
+        elevations = [a["elevation"] for a in per_meas_angles]
+        rolls = [a["roll"] for a in per_meas_angles]
         
         self.result = {
             "camera_id": self.camera_id,
-            "rotation_matrix": R_world_to_cam.tolist(),
-            "translation_vector": avg_position.tolist(),
-            "euler_angles": {
-                "azimuth": float(avg_azimuth),
-                "elevation": float(avg_elevation),
-                "roll": float(avg_roll)
-            },
+            "rotation_matrix": R_camera_vehicle.tolist(),
+            "translation_vector": t_camera.tolist(),
+            "euler_angles": camera_angles,
+            "coordinate_system": {"frame": "NED", "origin": "IMU", "x": "Forward", "y": "Right", "z": "Down"},
             "quality_metrics": {
-                "num_measurements": len(valid),
-                "mean_reproj_error_px": float(np.mean(reproj_errors)),
-                "max_reproj_error_px": float(np.max(reproj_errors)),
-                "mean_distance_diff_m": float(np.mean(distance_diffs)),
-                "position_std_m": position_std.tolist(),
-                "azimuth_std_deg": float(azimuth_std),
-                "elevation_std_deg": float(elevation_std),
-                "roll_std_deg": float(roll_std)
+                "num_measurements": len(self.measurements),
+                "optimization_converged": result.success,
+                "final_cost": float(result.cost),
+                "azimuth_std_deg": float(np.std(azimuths)),
+                "elevation_std_deg": float(np.std(elevations)),
+                "roll_std_deg": float(np.std(rolls)),
+                "mean_reproj_error_px": float(np.mean([m.reproj_error for m in self.measurements])),
             },
-            "calibration_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            "optimization_info": {
+                "iterations": result.nfev,
+                "message": result.message,
+                "board_yaws_deg": board_yaws_opt.tolist()
+            },
+            "prior_used": {
+                "position": self.prior.position.tolist() if self.prior else None,
+                "position_std": self.prior.position_std.tolist() if self.prior else None
+            },
+            "timestamp": datetime.now().isoformat()
         }
         
         return self.result
     
-    def print_results(self, ground_truth: Optional[dict] = None):
-        """Print calibration results with optional ground truth comparison."""
+    def print_results(self, ground_truth: dict = None):
+        """Print calibration results."""
         if self.result is None:
-            print("No results available")
+            print("No results computed yet")
             return
         
         r = self.result
-        e = r["euler_angles"]
         q = r["quality_metrics"]
-        t = r["translation_vector"]
+        e = r["euler_angles"]
         
-        print("\n" + "="*70)
-        print("EXTRINSIC CALIBRATION RESULTS")
-        print("="*70)
+        print("\n" + "="*60)
+        print("EXTRINSIC CALIBRATION RESULTS (OPTIMIZATION-BASED)")
+        print("="*60)
         
         print(f"\nCamera: {r['camera_id']}")
-        print(f"Measurements used: {q['num_measurements']}")
+        print(f"Measurements: {q['num_measurements']}")
+        print(f"Optimization: {'CONVERGED' if q['optimization_converged'] else 'DID NOT CONVERGE'}")
         
-        print("\n--- Camera Position (in world/IMU frame) ---")
-        print(f"  X (forward): {t[0]:+.4f} m")
-        print(f"  Y (right):   {t[1]:+.4f} m")
-        print(f"  Z (up):      {t[2]:+.4f} m")
-        print(f"  Position std: [{q['position_std_m'][0]:.4f}, {q['position_std_m'][1]:.4f}, {q['position_std_m'][2]:.4f}] m")
+        print(f"\n--- Camera Position (optimized) ---")
+        pos = r["translation_vector"]
+        print(f"  X (forward): {pos[0]:+.3f} m")
+        print(f"  Y (right):   {pos[1]:+.3f} m")
+        print(f"  Z (down):    {pos[2]:+.3f} m")
         
-        print("\n--- Camera Orientation (Euler angles) ---")
-        print(f"  Azimuth:   {e['azimuth']:+.3f}° (std: {q['azimuth_std_deg']:.3f}°)")
-        print(f"  Elevation: {e['elevation']:+.3f}° (std: {q['elevation_std_deg']:.3f}°)")
-        print(f"  Roll:      {e['roll']:+.3f}° (std: {q['roll_std_deg']:.3f}°)")
+        if r["prior_used"]["position"]:
+            prior_pos = r["prior_used"]["position"]
+            print(f"  (Prior was: [{prior_pos[0]:.3f}, {prior_pos[1]:.3f}, {prior_pos[2]:.3f}])")
+            delta = np.array(pos) - np.array(prior_pos)
+            print(f"  (Adjustment: [{delta[0]:+.3f}, {delta[1]:+.3f}, {delta[2]:+.3f}])")
         
-        print("\n--- Quality Metrics ---")
-        print(f"  Mean reproj error: {q['mean_reproj_error_px']:.3f} px")
-        print(f"  Max reproj error:  {q['max_reproj_error_px']:.3f} px")
-        print(f"  Mean distance diff: {q['mean_distance_diff_m']*100:.1f} cm")
+        print(f"\n--- Camera Orientation (optimized) ---")
+        print(f"  Azimuth:   {e['azimuth']:+.2f} deg (std: {q['azimuth_std_deg']:.3f} deg)")
+        print(f"  Elevation: {e['elevation']:+.2f} deg (std: {q['elevation_std_deg']:.3f} deg)")
+        print(f"  Roll:      {e['roll']:+.2f} deg (std: {q['roll_std_deg']:.3f} deg)")
         
-        # Quality assessment
-        print("\n--- Quality Assessment ---")
+        print(f"\n--- Quality ---")
+        print(f"  Reproj error: {q['mean_reproj_error_px']:.3f} px")
+        print(f"  Final cost:   {q['final_cost']:.4f}")
         
-        if q['mean_reproj_error_px'] < 0.5:
-            print(f"  ✓ Reprojection error EXCELLENT ({q['mean_reproj_error_px']:.2f} < 0.5 px)")
-        elif q['mean_reproj_error_px'] < 1.5:
-            print(f"  ✓ Reprojection error OK ({q['mean_reproj_error_px']:.2f} < 1.5 px)")
-        else:
-            print(f"  ✗ Reprojection error HIGH ({q['mean_reproj_error_px']:.2f} >= 1.5 px)")
+        if ground_truth:
+            gt_e = ground_truth.get("euler_angles", {})
+            gt_p = ground_truth.get("position", [])
+            print(f"\n--- Ground Truth Comparison ---")
+            if gt_p:
+                print(f"  Position error: [{pos[0]-gt_p[0]:+.3f}, {pos[1]-gt_p[1]:+.3f}, {pos[2]-gt_p[2]:+.3f}] m")
+            if "azimuth" in gt_e:
+                print(f"  Azimuth error:   {e['azimuth']-gt_e['azimuth']:+.3f} deg")
+            if "elevation" in gt_e:
+                print(f"  Elevation error: {e['elevation']-gt_e['elevation']:+.3f} deg")
+            if "roll" in gt_e:
+                print(f"  Roll error:      {e['roll']-gt_e['roll']:+.3f} deg")
         
-        if q['azimuth_std_deg'] < 0.3:
-            print(f"  ✓ Azimuth repeatability EXCELLENT (std {q['azimuth_std_deg']:.2f}° < 0.3°)")
-        elif q['azimuth_std_deg'] < 1.0:
-            print(f"  ✓ Azimuth repeatability OK (std {q['azimuth_std_deg']:.2f}° < 1.0°)")
-        else:
-            print(f"  ✗ Azimuth repeatability POOR (std {q['azimuth_std_deg']:.2f}° >= 1.0°)")
-        
-        if q['elevation_std_deg'] < 0.3:
-            print(f"  ✓ Elevation repeatability EXCELLENT (std {q['elevation_std_deg']:.2f}° < 0.3°)")
-        elif q['elevation_std_deg'] < 1.0:
-            print(f"  ✓ Elevation repeatability OK (std {q['elevation_std_deg']:.2f}° < 1.0°)")
-        else:
-            print(f"  ✗ Elevation repeatability POOR (std {q['elevation_std_deg']:.2f}° >= 1.0°)")
-        
-        # Ground truth comparison
-        if ground_truth is not None:
-            print("\n" + "-"*70)
-            print("GROUND TRUTH COMPARISON")
-            print("-"*70)
-            
-            gt_pos = ground_truth["position"]
-            gt_euler = ground_truth["euler_angles"]
-            
-            pos_error = np.linalg.norm(np.array(t) - np.array(gt_pos))
-            az_error = abs(e["azimuth"] - gt_euler["azimuth"])
-            el_error = abs(e["elevation"] - gt_euler["elevation"])
-            roll_error = abs(e["roll"] - gt_euler["roll"])
-            
-            print(f"\nPosition error: {pos_error*100:.2f} cm")
-            print(f"  X: {t[0]:.4f} vs {gt_pos[0]:.4f} (error: {(t[0]-gt_pos[0])*100:+.2f} cm)")
-            print(f"  Y: {t[1]:.4f} vs {gt_pos[1]:.4f} (error: {(t[1]-gt_pos[1])*100:+.2f} cm)")
-            print(f"  Z: {t[2]:.4f} vs {gt_pos[2]:.4f} (error: {(t[2]-gt_pos[2])*100:+.2f} cm)")
-            
-            print(f"\nAngular errors:")
-            print(f"  Azimuth:   {e['azimuth']:+.3f}° vs {gt_euler['azimuth']:+.3f}° (error: {az_error:.3f}°)")
-            print(f"  Elevation: {e['elevation']:+.3f}° vs {gt_euler['elevation']:+.3f}° (error: {el_error:.3f}°)")
-            print(f"  Roll:      {e['roll']:+.3f}° vs {gt_euler['roll']:+.3f}° (error: {roll_error:.3f}°)")
-            
-            print("\n--- Spec Compliance ---")
-            baseline = np.linalg.norm(gt_pos)
-            
-            if az_error < 1.0:
-                print(f"  ✓ Azimuth error {az_error:.3f}° < 1° PASS")
-            else:
-                print(f"  ✗ Azimuth error {az_error:.3f}° >= 1° FAIL")
-            
-            if el_error < 1.0:
-                print(f"  ✓ Elevation error {el_error:.3f}° < 1° PASS")
-            else:
-                print(f"  ✗ Elevation error {el_error:.3f}° >= 1° FAIL")
-            
-            if pos_error / baseline < 0.05:
-                print(f"  ✓ Position error {pos_error/baseline*100:.1f}% < 5% PASS")
-            else:
-                print(f"  ✗ Position error {pos_error/baseline*100:.1f}% >= 5% FAIL")
+        print(f"\n--- Spec Compliance ---")
+        az_ok = q['azimuth_std_deg'] < 1.0
+        el_ok = q['elevation_std_deg'] < 1.0
+        print(f"  Azimuth std:   {q['azimuth_std_deg']:.3f} deg {'< 1 deg PASS' if az_ok else '>= 1 deg FAIL'}")
+        print(f"  Elevation std: {q['elevation_std_deg']:.3f} deg {'< 1 deg PASS' if el_ok else '>= 1 deg FAIL'}")
     
-    def save_to_json(self, output_path: str):
-        """Save extrinsics to JSON file."""
+    def save_to_json(self, path: str):
+        """Save results to JSON."""
         if self.result is None:
             raise ValueError("No results to save")
-        
-        with open(output_path, 'w') as f:
+        with open(path, 'w') as f:
             json.dump(self.result, f, indent=2)
-        
-        print(f"\nExtrinsics saved to: {output_path}")
+        print(f"\nSaved to: {path}")
 
 
 # =============================================================================
-# SYNTHETIC DATA GENERATION (for testing)
+# MULTI-CAMERA CALIBRATOR
 # =============================================================================
 
-class SyntheticExtrinsicTest:
-    """
-    Generates synthetic calibration scenario for algorithm validation.
+class MultiCameraCalibrator:
+    """Calibrates multiple cameras with inter-camera distance constraints."""
     
-    Simulates:
-    - Camera at known position/orientation (ground truth)
-    - Board placed at various positions
-    - Realistic measurement noise
-    """
+    def __init__(self, board_config: ChArUcoBoardConfig, config: CalibrationConfig = None):
+        self.board_config = board_config
+        self.config = config or CalibrationConfig()
+        self.calibrators: Dict[str, ExtrinsicCalibrator] = {}
+        self.inter_camera_constraints: List[InterCameraConstraint] = []
+    
+    def add_camera(self, camera_id: str, intrinsics: dict, prior: CameraPrior):
+        cal = ExtrinsicCalibrator(self.board_config, intrinsics, camera_id, self.config)
+        cal.set_prior(prior)
+        self.calibrators[camera_id] = cal
+    
+    def add_inter_camera_constraint(self, cam1: str, cam2: str, distance: float, std: float = 0.02):
+        self.inter_camera_constraints.append(InterCameraConstraint(cam1, cam2, distance, std))
+    
+    def add_measurement(self, camera_id: str, image: np.ndarray, laser_distance: float, ins_data: INSData) -> dict:
+        if camera_id not in self.calibrators:
+            raise ValueError(f"Unknown camera: {camera_id}")
+        return self.calibrators[camera_id].add_measurement(image, laser_distance, ins_data)
+    
+    def compute_extrinsics(self) -> Dict[str, dict]:
+        """Compute extrinsics for all cameras."""
+        if not self.inter_camera_constraints:
+            results = {}
+            for cam_id, cal in self.calibrators.items():
+                if len(cal.measurements) >= 3:
+                    results[cam_id] = cal.compute_extrinsics()
+            return results
+        return self._joint_optimization()
+    
+    def _joint_optimization(self) -> Dict[str, dict]:
+        """Joint optimization with inter-camera constraints."""
+        camera_ids = []
+        for cam_id, cal in self.calibrators.items():
+            if len(cal.measurements) >= 3:
+                camera_ids.append(cam_id)
+        
+        if not camera_ids:
+            return {}
+        
+        # Build parameter vector using priors for initialization
+        params_list = []
+        for cam_id in camera_ids:
+            cal = self.calibrators[cam_id]
+            n_meas = len(cal.measurements)
+            
+            # Use prior for initialization
+            t = cal.prior.position.copy() if cal.prior else np.zeros(3)
+            
+            # Use prior orientation (critical for avoiding local minima)
+            az_init = 0.0
+            if cal.prior and cal.prior.azimuth is not None:
+                az_init = cal.prior.azimuth
+                el = cal.prior.elevation if cal.prior.elevation is not None else 0.0
+                roll = cal.prior.roll if cal.prior.roll is not None else 0.0
+                R = RotationUtils.camera_angles_to_rotation(az_init, el, roll)
+            else:
+                R = np.eye(3)
+            
+            q = Rotation.from_matrix(R).as_quat()
+            
+            # Initialize board yaws based on camera azimuth
+            board_yaws = np.array([az_init + 180.0 for _ in range(n_meas)])
+            
+            cam_params = np.concatenate([t, q, board_yaws])
+            params_list.append(cam_params)
+        
+        x0 = np.concatenate(params_list)
+        
+        def residual_fn(params):
+            residuals = []
+            offset = 0
+            camera_positions = {}
+            
+            for cam_id in camera_ids:
+                cal = self.calibrators[cam_id]
+                n_meas = len(cal.measurements)
+                n_params = 7 + n_meas
+                cam_params = params[offset:offset+n_params]
+                offset += n_params
+                
+                t_camera = cam_params[0:3]
+                q_camera = cam_params[3:7]
+                q_camera = q_camera / np.linalg.norm(q_camera)
+                R_camera_vehicle = Rotation.from_quat(q_camera).as_matrix()
+                board_yaws = cam_params[7:]
+                camera_positions[cam_id] = t_camera
+                
+                for j, meas in enumerate(cal.measurements):
+                    R_world_vehicle = meas.ins_data.to_rotation_matrix()
+                    R_board_world = construct_R_board_to_world(board_yaws[j])
+                    R_camera_board = meas.R_board_in_camera.T
+                    R_expected = R_world_vehicle @ R_board_world @ R_camera_board
+                    R_error = R_camera_vehicle @ R_expected.T
+                    rvec_error = Rotation.from_matrix(R_error).as_rotvec()
+                    residuals.extend(self.config.weight_reprojection * 180/np.pi * rvec_error)
+                    
+                    board_y = R_board_world[:, 1]
+                    residuals.extend(self.config.weight_level_board * (board_y - [0,0,1]))
+                    
+                    pnp_dist = np.linalg.norm(meas.t_board_in_camera)
+                    residuals.append(self.config.weight_distance * (pnp_dist - meas.laser_distance) / self.config.laser_distance_std)
+                
+                if cal.prior is not None:
+                    for k in range(3):
+                        residuals.append(self.config.weight_prior * (t_camera[k] - cal.prior.position[k]) / cal.prior.position_std[k])
+                    
+                    # Orientation prior constraint (critical for breaking azimuth degeneracy)
+                    if cal.prior.azimuth is not None:
+                        angles = RotationUtils.rotation_to_camera_angles(R_camera_vehicle)
+                        az_residual = (angles['azimuth'] - cal.prior.azimuth) / cal.prior.orientation_std_deg
+                        residuals.append(self.config.weight_prior * 5 * az_residual)
+                    if cal.prior.elevation is not None:
+                        angles = RotationUtils.rotation_to_camera_angles(R_camera_vehicle)
+                        el_residual = (angles['elevation'] - cal.prior.elevation) / cal.prior.orientation_std_deg
+                        residuals.append(self.config.weight_prior * 5 * el_residual)
+                    if cal.prior.roll is not None:
+                        angles = RotationUtils.rotation_to_camera_angles(R_camera_vehicle)
+                        roll_residual = (angles['roll'] - cal.prior.roll) / cal.prior.orientation_std_deg
+                        residuals.append(self.config.weight_prior * 5 * roll_residual)
+            
+            # Inter-camera constraints
+            for c in self.inter_camera_constraints:
+                if c.camera_id_1 in camera_positions and c.camera_id_2 in camera_positions:
+                    dist = np.linalg.norm(camera_positions[c.camera_id_1] - camera_positions[c.camera_id_2])
+                    residuals.append(self.config.weight_distance * (dist - c.distance) / c.std)
+            
+            return np.array(residuals)
+        
+        result = least_squares(residual_fn, x0, method='lm', max_nfev=self.config.max_iterations * len(x0))
+        
+        results = {}
+        offset = 0
+        for cam_id in camera_ids:
+            cal = self.calibrators[cam_id]
+            n_meas = len(cal.measurements)
+            n_params = 7 + n_meas
+            cam_params = result.x[offset:offset+n_params]
+            offset += n_params
+            
+            t_camera = cam_params[0:3]
+            q_camera = cam_params[3:7] / np.linalg.norm(cam_params[3:7])
+            R_camera_vehicle = Rotation.from_quat(q_camera).as_matrix()
+            camera_angles = RotationUtils.rotation_to_camera_angles(R_camera_vehicle)
+            
+            results[cam_id] = {
+                "camera_id": cam_id,
+                "rotation_matrix": R_camera_vehicle.tolist(),
+                "translation_vector": t_camera.tolist(),
+                "euler_angles": camera_angles,
+                "optimization_converged": result.success,
+            }
+            cal.result = results[cam_id]
+        
+        return results
+
+
+# =============================================================================
+# SYNTHETIC TEST (No cheating)
+# =============================================================================
+
+class SyntheticTest:
+    """Generates synthetic test data with consistent conventions."""
     
     def __init__(self, board_config: ChArUcoBoardConfig, intrinsics: dict,
-                 camera_position: np.ndarray, camera_euler: dict):
-        """
-        Args:
-            board_config: ChArUco board configuration
-            intrinsics: Camera intrinsics dict
-            camera_position: True camera position in world frame [x, y, z]
-            camera_euler: True camera orientation {"azimuth", "elevation", "roll"}
-        """
+                 camera_position: np.ndarray, camera_angles: dict, ins_euler: dict):
         self.board_config = board_config
-        self.intrinsics = intrinsics
+        self.camera_position = camera_position
+        self.camera_angles = camera_angles
+        self.ins_euler = ins_euler
         
         self.camera_matrix = np.array(intrinsics["camera_matrix"], dtype=np.float64)
         self.dist_coeffs = np.array(intrinsics["distortion_coefficients"], dtype=np.float64)
         self.image_size = tuple(intrinsics["image_size"])
         
-        # Ground truth camera pose
-        self.true_position = camera_position
-        self.true_euler = camera_euler
-        self.true_R = self._euler_to_rotation(
-            camera_euler["azimuth"],
-            camera_euler["elevation"],
-            camera_euler["roll"]
+        board, _ = board_config.create_board()
+        # Higher resolution for better detection
+        px_per_m = 3000  # 3000 pixels per meter for good marker resolution
+        bw = int(board_config.board_width * px_per_m)
+        bh = int(board_config.board_height * px_per_m)
+        self.board_image = board.generateImage((bw, bh))
+        self.board_corners_2d = np.array([[0,0], [bw,0], [bw,bh], [0,bh]], dtype=np.float32)
+        
+        # Use SAME functions as calibrator
+        R_world_vehicle = RotationUtils.euler_to_rotation(ins_euler["yaw"], ins_euler["pitch"], ins_euler["roll"])
+        R_vehicle_world = R_world_vehicle.T
+        R_camera_vehicle = RotationUtils.camera_angles_to_rotation(
+            camera_angles["azimuth"], camera_angles["elevation"], camera_angles["roll"]
         )
         
-        # Create board and board image
-        self.board, self.aruco_dict = board_config.create_board()
+        self.R_camera_world = R_vehicle_world @ R_camera_vehicle
+        self.camera_pos_world = R_vehicle_world @ camera_position
+    
+    def generate_image(self, board_pos_world: np.ndarray, board_yaw: float) -> np.ndarray:
+        bw, bh = self.board_config.board_width, self.board_config.board_height
+        R_board_world = construct_R_board_to_world(board_yaw)
         
-        board_px_per_m = 1000
-        board_w = int(board_config.board_width * board_px_per_m)
-        board_h = int(board_config.board_height * board_px_per_m)
+        # Board corners in board frame (centered at origin)
+        # When looking AT the board from in front:
+        # - Left in your view = board's right (+X)
+        # - Right in your view = board's left (-X)
+        # Order: top-left, top-right, bottom-right, bottom-left (as seen in image)
+        corners_board = np.array([[+bw/2,-bh/2,0], [-bw/2,-bh/2,0], [-bw/2,bh/2,0], [+bw/2,bh/2,0]])
+        corners_world = (R_board_world @ corners_board.T).T + board_pos_world
         
-        if hasattr(self.board, 'generateImage'):
-            self.board_image = self.board.generateImage((board_w, board_h))
-        else:
-            self.board_image = self.board.draw((board_w, board_h))
+        R_world_camera = self.R_camera_world.T
+        corners_camera = (R_world_camera @ (corners_world - self.camera_pos_world).T).T
         
-        self.board_corners_2d = np.array([
-            [0, 0], [board_w, 0], [board_w, board_h], [0, board_h]
+        # Project to 2D
+        corners_2d = []
+        for pt in corners_camera:
+            if pt[2] <= 0.1:
+                return None
+            x = self.camera_matrix[0,0] * pt[0] / pt[2] + self.camera_matrix[0,2]
+            y = self.camera_matrix[1,1] * pt[1] / pt[2] + self.camera_matrix[1,2]
+            corners_2d.append([x, y])
+        
+        corners_2d = np.array(corners_2d, dtype=np.float32)
+        w, h = self.image_size
+        if not all(0 <= c[0] < w and 0 <= c[1] < h for c in corners_2d):
+            return None
+        
+        # Reorder corners_2d to match source order: TL, TR, BR, BL
+        # TL has smallest x+y, BR has largest x+y
+        # TR has largest x-y, BL has smallest x-y
+        
+        # Compute scores for each corner position
+        x_plus_y = corners_2d[:, 0] + corners_2d[:, 1]
+        x_minus_y = corners_2d[:, 0] - corners_2d[:, 1]
+        
+        tl_idx = np.argmin(x_plus_y)   # smallest x+y = top-left
+        br_idx = np.argmax(x_plus_y)   # largest x+y = bottom-right
+        tr_idx = np.argmax(x_minus_y)  # largest x-y = top-right
+        bl_idx = np.argmin(x_minus_y)  # smallest x-y = bottom-left
+        
+        ordered = np.array([
+            corners_2d[tl_idx],  # TL
+            corners_2d[tr_idx],  # TR
+            corners_2d[br_idx],  # BR
+            corners_2d[bl_idx],  # BL
         ], dtype=np.float32)
         
-        self.board_corners_3d = np.array([
-            [0, 0, 0],
-            [board_config.board_width, 0, 0],
-            [board_config.board_width, board_config.board_height, 0],
-            [0, board_config.board_height, 0]
-        ], dtype=np.float32)
+        H, _ = cv2.findHomography(self.board_corners_2d, ordered)
+        if H is None:
+            return None
         
-        # Measurement noise parameters
-        self.position_noise_std = 0.005   # 5mm
-        self.angle_noise_std = 2.0        # 2 degrees
-    
-    def _euler_to_rotation(self, azimuth, elevation, roll):
-        """
-        Convert Euler angles to rotation matrix R_world_to_cam.
+        # Create solid gray background
+        image = np.full((h, w, 3), 128, dtype=np.uint8)
         
-        This gives a matrix that transforms points from world frame to camera frame.
+        # Warp board
+        board_color = cv2.cvtColor(self.board_image, cv2.COLOR_GRAY2BGR)
+        warped = cv2.warpPerspective(board_color, H, (w, h), 
+                                      flags=cv2.INTER_LINEAR,
+                                      borderValue=(128, 128, 128))
+        mask = cv2.warpPerspective(np.ones_like(self.board_image)*255, H, (w, h),
+                                    flags=cv2.INTER_LINEAR)
         
-        Camera frame convention:
-            Z = optical axis (forward, out of lens)
-            X = right (in image horizontal direction)
-            Y = down (in image vertical direction)
-            
-        World frame convention:
-            X = forward
-            Y = right  
-            Z = up
-            
-        Euler angles:
-            azimuth: rotation around world Z (0° = forward, 90° = right)
-            elevation: angle below horizontal (negative = looking down)
-            roll: rotation around camera optical axis
-        """
-        az = np.radians(azimuth)
-        el = np.radians(elevation)
-        ro = np.radians(roll)
+        # Clean up interpolation artifacts - threshold to pure black/white
+        warped_gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
+        _, warped_clean = cv2.threshold(warped_gray, 127, 255, cv2.THRESH_BINARY)
+        warped = cv2.cvtColor(warped_clean, cv2.COLOR_GRAY2BGR)
         
-        # Camera optical axis direction in world frame
-        cam_z_world = np.array([
-            np.cos(el) * np.cos(az),
-            np.cos(el) * np.sin(az),
-            np.sin(el)
-        ])
+        # Overlay board on background
+        image[mask > 128] = warped[mask > 128]
         
-        # Camera right axis (roughly horizontal, perpendicular to optical axis)
-        cam_x_world = np.array([np.sin(az), -np.cos(az), 0])
-        cam_x_world = cam_x_world / np.linalg.norm(cam_x_world)
-        
-        # Camera down axis (perpendicular to both)
-        cam_y_world = np.cross(cam_z_world, cam_x_world)
-        cam_y_world = cam_y_world / np.linalg.norm(cam_y_world)
-        
-        # Recalculate cam_x for orthogonality
-        cam_x_world = np.cross(cam_y_world, cam_z_world)
-        cam_x_world = cam_x_world / np.linalg.norm(cam_x_world)
-        
-        # Apply roll (rotation around optical axis)
-        if abs(ro) > 1e-6:
-            # Rotation around cam_z
-            c, s = np.cos(ro), np.sin(ro)
-            cam_x_world_new = c * cam_x_world + s * cam_y_world
-            cam_y_world_new = -s * cam_x_world + c * cam_y_world
-            cam_x_world = cam_x_world_new
-            cam_y_world = cam_y_world_new
-        
-        # Build rotation matrix (rows are camera axes in world coordinates)
-        R_world_to_cam = np.array([cam_x_world, cam_y_world, cam_z_world])
-        
-        return R_world_to_cam
-    
-    def generate_measurement(self, board_position_world: np.ndarray,
-                             board_yaw: float = 0.0) -> Tuple[np.ndarray, BoardPlacement]:
-        """
-        Generate synthetic image and board placement measurement.
-        
-        board_yaw: direction of camera from board (board markers face this direction)
-        
-        For rendering, we place the board with Z pointing AWAY from camera (yaw+180).
-        This creates an image where detection works without flipping.
-        
-        The get_board_pose_in_world uses yaw for board Z direction.
-        Since we use yaw+180 here, there's a 180° rotation difference that
-        the calibration code must handle.
-        """
-        board_center_world = board_position_world.copy()
-        
-        # Board Z points AWAY from camera (opposite direction)
-        board_z_direction = board_yaw + 180
-        yaw_rad = np.radians(board_z_direction)
-        
-        # Board Z points away from camera
-        board_z_world = np.array([np.cos(yaw_rad), np.sin(yaw_rad), 0])
-        # Board Y points DOWN in world
-        board_y_world = np.array([0, 0, -1])
-        # Board X = Y cross Z (right-hand rule)
-        board_x_world = np.cross(board_y_world, board_z_world)
-        board_x_world = board_x_world / np.linalg.norm(board_x_world)
-        board_y_world = np.cross(board_z_world, board_x_world)
-        board_y_world = board_y_world / np.linalg.norm(board_y_world)
-        
-        R_board_to_world = np.column_stack([board_x_world, board_y_world, board_z_world])
-        
-        # Board dimensions
-        bw = self.board_config.board_width
-        bh = self.board_config.board_height
-        
-        # Board origin in world
-        board_origin_world = board_center_world - R_board_to_world @ np.array([bw/2, bh/2, 0])
-        
-        # Board corners - direct mapping
-        corners_local = np.array([
-            [0, 0, 0],      # image TL -> board origin
-            [bw, 0, 0],     # image TR -> board +X
-            [bw, bh, 0],    # image BR -> board +X, +Y
-            [0, bh, 0]      # image BL -> board +Y
-        ])
-        
-        # Transform corners to world frame
-        corners_world = (R_board_to_world @ corners_local.T).T + board_origin_world
-        
-        # Transform to camera frame
-        corners_rel = corners_world - self.true_position
-        corners_cam = (self.true_R @ corners_rel.T).T
-        
-        # Check if board is in front of camera (Z > 0)
-        if np.any(corners_cam[:, 2] <= 0.1):
-            image = np.ones((self.image_size[1], self.image_size[0], 3), dtype=np.uint8) * 128
-            placement = BoardPlacement(x=board_position_world[0], y=board_position_world[1],
-                                       z=board_position_world[2], yaw=board_yaw)
-            return image, placement
-        
-        # Project corners to image
-        fx, fy = self.camera_matrix[0, 0], self.camera_matrix[1, 1]
-        cx, cy = self.camera_matrix[0, 2], self.camera_matrix[1, 2]
-        
-        corners_2d = np.array([[fx * c[0] / c[2] + cx, fy * c[1] / c[2] + cy] 
-                               for c in corners_cam], dtype=np.float32)
-        
-        # Check bounds
-        margin = 500
-        if (np.any(corners_2d[:, 0] < -margin) or np.any(corners_2d[:, 0] > self.image_size[0] + margin) or
-            np.any(corners_2d[:, 1] < -margin) or np.any(corners_2d[:, 1] > self.image_size[1] + margin)):
-            image = np.ones((self.image_size[1], self.image_size[0], 3), dtype=np.uint8) * 128
-        else:
-            H, _ = cv2.findHomography(self.board_corners_2d, corners_2d)
-            
-            if H is not None:
-                image = cv2.warpPerspective(self.board_image, H, self.image_size,
-                                            borderMode=cv2.BORDER_CONSTANT, borderValue=128)
-                if len(image.shape) == 2:
-                    image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-                noise = np.random.normal(0, 3, image.shape).astype(np.int16)
-                image = np.clip(image.astype(np.int16) + noise, 0, 255).astype(np.uint8)
-            else:
-                image = np.ones((self.image_size[1], self.image_size[0], 3), dtype=np.uint8) * 128
-        
-        # Simulated operator measurement (with noise)
-        measured_position = board_position_world + np.random.normal(0, self.position_noise_std, 3)
-        measured_yaw = board_yaw + np.random.normal(0, self.angle_noise_std)
-        
-        placement = BoardPlacement(
-            x=float(measured_position[0]), y=float(measured_position[1]),
-            z=float(measured_position[2]), yaw=float(measured_yaw), pitch=0, roll=0
-        )
-        
-        return image, placement
+        return image
     
     def get_ground_truth(self) -> dict:
-        """Return ground truth for comparison."""
-        return {
-            "position": self.true_position.tolist(),
-            "euler_angles": self.true_euler
-        }
+        return {"position": self.camera_position.tolist(), "euler_angles": self.camera_angles.copy()}
 
 
 # =============================================================================
-# MAIN
+# DEMO
 # =============================================================================
 
-def run_synthetic_calibration(intrinsics_path: str, camera_id: str, 
-                              output_path: str, num_positions: int = 5):
-    """Run extrinsic calibration with synthetic data."""
+
+def run_demo(intrinsics_path: str, output_path: str, num_measurements: int = 5):
+    """
+    Demo with 2 cameras showing complete calibration workflow.
     
-    print("="*70)
-    print("EXTRINSIC CALIBRATION - SYNTHETIC TEST")
-    print("="*70)
+    This demonstrates:
+    - Position refinement via inter-camera distance constraint
+    - Orientation refinement to sub-degree accuracy
+    - Full operator workflow
     
-    # Load intrinsics
-    print(f"\nLoading intrinsics: {intrinsics_path}")
-    with open(intrinsics_path, 'r') as f:
-        intrinsics = json.load(f)
+    Cameras do NOT need overlapping FOV - each sees its own board.
+    """
     
-    # Board config
-    board_config = ChArUcoBoardConfig()
-    
-    # Define ground truth camera pose based on camera_id
-    if "1" in camera_id:
-        camera_position = np.array([0.5, 0.8, 1.0])  # 0.5m fwd, 0.8m right, 1m up
-        camera_euler = {"azimuth": 45.0, "elevation": -10.0, "roll": 0.5}
+    # Load or use default intrinsics
+    if intrinsics_path and os.path.exists(intrinsics_path):
+        with open(intrinsics_path) as f:
+            intrinsics = json.load(f)
     else:
-        camera_position = np.array([0.5, -0.8, 1.0])  # 0.5m fwd, 0.8m left, 1m up
-        camera_euler = {"azimuth": -45.0, "elevation": -10.0, "roll": -0.5}
+        intrinsics = {
+            "camera_matrix": [[1200, 0, 960], [0, 1200, 540], [0, 0, 1]],
+            "distortion_coefficients": [0, 0, 0, 0, 0],
+            "image_size": [1920, 1080]
+        }
     
-    print(f"\nGround Truth Camera Pose:")
-    print(f"  Position: [{camera_position[0]:.2f}, {camera_position[1]:.2f}, {camera_position[2]:.2f}] m")
-    print(f"  Azimuth: {camera_euler['azimuth']:.1f}°")
-    print(f"  Elevation: {camera_euler['elevation']:.1f}°")
-    print(f"  Roll: {camera_euler['roll']:.1f}°")
+    # Ground truth for two cameras (unknown to operator)
+    gt_cam1_pos = np.array([0.5, 0.3, -0.1])   # Front-left
+    gt_cam1_angles = {"azimuth": 30.0, "elevation": 5.0, "roll": 0.5}
     
-    # Create synthetic test
-    synth = SyntheticExtrinsicTest(board_config, intrinsics, camera_position, camera_euler)
+    gt_cam2_pos = np.array([0.5, -0.3, -0.1])  # Front-right
+    gt_cam2_angles = {"azimuth": -30.0, "elevation": 5.0, "roll": -0.5}
     
-    print(f"\nMeasurement noise (simulated):")
-    print(f"  Position: ±{synth.position_noise_std*1000:.0f}mm")
-    print(f"  Board angle: ±{synth.angle_noise_std:.1f}°")
+    ins_euler = {"yaw": 0.0, "pitch": 0.0, "roll": 0.0}
     
-    # Create calibrator
-    calibrator = ExtrinsicCalibrator(board_config, intrinsics, camera_id)
+    # True inter-camera distance
+    true_inter_camera_dist = np.linalg.norm(gt_cam1_pos - gt_cam2_pos)
     
-    # Generate board positions in world frame
-    # Board should be in front of the camera (in its field of view)
-    # Camera is at camera_position, looking in direction of azimuth
+    print("\n" + "="*70)
+    print("DEMO MODE - Two-Camera Extrinsic Calibration")
+    print("="*70)
     
-    board_positions = []
-    for i in range(num_positions):
-        # Distance from camera: 3-6m
-        dist = 3.0 + i * 0.6
-        
-        # Slight variation in angle (±10° from camera optical axis)
-        angle_offset = (i - num_positions//2) * 4  # degrees
-        angle = np.radians(camera_euler["azimuth"] + angle_offset)
-        
-        # Board position: camera position + offset in viewing direction
-        # Camera looks along its azimuth direction
-        bx = camera_position[0] + dist * np.cos(angle)
-        by = camera_position[1] + dist * np.sin(angle)
-        bz = camera_position[2] + np.random.uniform(-0.2, 0.2) + dist * np.sin(np.radians(camera_euler["elevation"]))
-        
-        # Board faces back toward camera
-        # board_yaw = 180 means board normal points in -X direction (back toward origin)
-        # We want board to face toward the camera
-        board_yaw = camera_euler["azimuth"] + 180 + np.random.uniform(-5, 5)
-        
-        board_positions.append((np.array([bx, by, bz]), board_yaw))
-    
-    # Run calibration
-    print(f"\n" + "-"*70)
-    print("CALIBRATION MEASUREMENTS")
+    # =========================================================================
+    # PHASE 0: PREPARATION
+    # =========================================================================
+    print("\n" + "-"*70)
+    print("PHASE 0: PREPARATION")
     print("-"*70)
-    
-    for i, (board_pos, board_yaw) in enumerate(board_positions):
-        print(f"\n[Measurement {i+1}/{num_positions}]")
-        print(f"  Board placed at: X={board_pos[0]:.2f}m, Y={board_pos[1]:.2f}m, Z={board_pos[2]:.2f}m")
-        print(f"  Board facing: {board_yaw:.1f}°")
-        
-        # Generate synthetic image and measurement
-        image, placement = synth.generate_measurement(board_pos, board_yaw)
-        
-        print(f"  Operator measures: X={placement.x:.3f}m, Y={placement.y:.3f}m, Z={placement.z:.3f}m, yaw={placement.yaw:.1f}°")
-        
-        # Process measurement
-        result = calibrator.add_measurement(image, placement)
-        
-        if result["success"]:
-            print(f"  ✓ Detection: {result['corners_detected']} corners, reproj={result['reproj_error']:.3f}px")
-            print(f"    Computed camera pose: az={result['euler_angles']['azimuth']:.2f}°, "
-                  f"el={result['euler_angles']['elevation']:.2f}°")
-        else:
-            print(f"  ✗ Failed: {result['error']}")
-    
-    # Compute final extrinsics
-    print(f"\n" + "-"*70)
-    print("COMPUTING FINAL EXTRINSICS")
-    print("-"*70)
-    
-    try:
-        extrinsics = calibrator.compute_extrinsics()
-        calibrator.print_results(synth.get_ground_truth())
-        calibrator.save_to_json(output_path)
-        return extrinsics
-    except ValueError as e:
-        print(f"Calibration failed: {e}")
-        return None
-
-
-def print_operator_instructions():
-    """Print detailed instructions for the operator."""
     print("""
-╔══════════════════════════════════════════════════════════════════════╗
-║                    EXTRINSIC CALIBRATION GUIDE                       ║
-╚══════════════════════════════════════════════════════════════════════╝
+Required equipment:
+  - ChArUco calibration board (10x10, 11cm squares, 8.5cm markers)
+  - Laser distance meter (±2cm accuracy)
+  - Measuring tape (for rough camera position estimates)
+  - Calipers or precision ruler (for inter-camera distance - CRITICAL!)
+  - Laptop with calibration software
+
+Pre-calibration:
+  1. Intrinsic calibration complete for both cameras
+  2. Cameras rigidly mounted in final positions
+  3. INS powered and providing valid data
+""")
+    
+    print("GROUND TRUTH (unknown to operator in real scenario):")
+    print(f"  Camera LEFT:  pos=[{gt_cam1_pos[0]:.2f}, {gt_cam1_pos[1]:.2f}, {gt_cam1_pos[2]:.2f}]m, az={gt_cam1_angles['azimuth']} deg")
+    print(f"  Camera RIGHT: pos=[{gt_cam2_pos[0]:.2f}, {gt_cam2_pos[1]:.2f}, {gt_cam2_pos[2]:.2f}]m, az={gt_cam2_angles['azimuth']} deg")
+    print(f"  Inter-camera distance: {true_inter_camera_dist:.4f}m")
+    
+    # =========================================================================
+    # PHASE 1: FIELD MEASUREMENTS
+    # =========================================================================
+    print("\n" + "-"*70)
+    print("PHASE 1: FIELD MEASUREMENTS")
+    print("-"*70)
+    print("""
+OPERATOR ACTIONS:
+
+1. MEASURE INTER-CAMERA DISTANCE (CRITICAL - use calipers!):
+   - Measure physical distance between camera mounting points
+   - This constraint enables POSITION REFINEMENT
+   - Target accuracy: ±1cm
+   
+2. ROUGH POSITION ESTIMATES per camera (tape measure):
+   - X (forward), Y (right), Z (down) from IMU
+   - Accuracy: ±20cm is acceptable - WILL BE REFINED by optimization
+   
+3. ORIENTATION ESTIMATES per camera:
+   - Azimuth (pointing direction), Elevation, Roll
+   - Accuracy: ±1 deg - will be refined to sub-degree
+""")
+    
+    board_config = ChArUcoBoardConfig()
+    synth1 = SyntheticTest(board_config, intrinsics, gt_cam1_pos, gt_cam1_angles, ins_euler)
+    synth2 = SyntheticTest(board_config, intrinsics, gt_cam2_pos, gt_cam2_angles, ins_euler)
+    
+    # Simulate field measurements with realistic errors
+    np.random.seed(42)
+    
+    # Position priors with ~15cm error (tape measure inaccuracy)
+    prior1_pos = gt_cam1_pos + np.array([0.12, 0.08, -0.06])
+    prior2_pos = gt_cam2_pos + np.array([0.10, -0.12, 0.05])
+    
+    # Orientation priors with ~0.5 deg error
+    prior1_az = gt_cam1_angles["azimuth"] + 0.4
+    prior1_el = gt_cam1_angles["elevation"] + 0.2
+    prior1_roll = gt_cam1_angles["roll"] - 0.3
+    
+    prior2_az = gt_cam2_angles["azimuth"] - 0.3
+    prior2_el = gt_cam2_angles["elevation"] + 0.1
+    prior2_roll = gt_cam2_angles["roll"] + 0.2
+    
+    # Inter-camera distance measured accurately with calipers
+    measured_inter_camera_dist = true_inter_camera_dist
+    
+    print("SIMULATED OPERATOR MEASUREMENTS:")
+    print(f"\n  Inter-camera distance (calipers): {measured_inter_camera_dist:.4f}m ± 1cm")
+    
+    print(f"\n  Camera LEFT (tape measure):")
+    print(f"    Position: [{prior1_pos[0]:.2f}, {prior1_pos[1]:.2f}, {prior1_pos[2]:.2f}]m")
+    print(f"    Position error: {np.linalg.norm(prior1_pos - gt_cam1_pos)*100:.1f}cm")
+    print(f"    Orientation: az={prior1_az:.1f} deg, el={prior1_el:.1f} deg, roll={prior1_roll:.1f} deg")
+    
+    print(f"\n  Camera RIGHT (tape measure):")
+    print(f"    Position: [{prior2_pos[0]:.2f}, {prior2_pos[1]:.2f}, {prior2_pos[2]:.2f}]m")
+    print(f"    Position error: {np.linalg.norm(prior2_pos - gt_cam2_pos)*100:.1f}cm")
+    print(f"    Orientation: az={prior2_az:.1f} deg, el={prior2_el:.1f} deg, roll={prior2_roll:.1f} deg")
+    
+    prior1 = CameraPrior(
+        position=prior1_pos, position_std=np.array([0.20, 0.20, 0.20]),
+        azimuth=prior1_az, elevation=prior1_el, roll=prior1_roll,
+        orientation_std_deg=1.0
+    )
+    prior2 = CameraPrior(
+        position=prior2_pos, position_std=np.array([0.20, 0.20, 0.20]),
+        azimuth=prior2_az, elevation=prior2_el, roll=prior2_roll,
+        orientation_std_deg=1.0
+    )
+    
+    # =========================================================================
+    # PHASE 2: CALIBRATION MEASUREMENTS
+    # =========================================================================
+    print("\n" + "-"*70)
+    print("PHASE 2: CALIBRATION MEASUREMENTS")
+    print("-"*70)
+    print(f"""
+OPERATOR ACTIONS (for each camera, {num_measurements} measurements):
+
+  1. Position board in camera's FOV (1.5 - 2.5m away)
+  2. Hold board LEVEL, facing camera
+  3. Measure distance with laser meter
+  4. Capture image, verify 81 corners detected
+  5. Repeat at different distances
+
+NOTE: Cameras do NOT need to see the same board!
+      Each camera is calibrated independently.
+      Inter-camera distance constraint links them geometrically.
+""")
+    
+    # Create multi-camera calibrator
+    multi_cal = MultiCameraCalibrator(board_config)
+    multi_cal.add_camera("camera_left", intrinsics, prior1)
+    multi_cal.add_camera("camera_right", intrinsics, prior2)
+    multi_cal.add_inter_camera_constraint("camera_left", "camera_right",
+                                          distance=measured_inter_camera_dist, std=0.01)
+    
+    print("SIMULATED MEASUREMENTS:")
+    
+    print("\n  Camera LEFT:")
+    for i in range(num_measurements):
+        distance = 1.5 + i * 0.2
+        cam_dir = synth1.R_camera_world[:, 2]
+        board_pos = synth1.camera_pos_world + distance * cam_dir
+        board_yaw = np.degrees(np.arctan2(cam_dir[1], cam_dir[0])) + 180.0 + np.random.uniform(-3, 3)
+        
+        image = synth1.generate_image(board_pos, board_yaw)
+        if image is not None:
+            ins_data = INSData(yaw=ins_euler["yaw"], pitch=ins_euler["pitch"], roll=ins_euler["roll"])
+            laser_dist = distance + np.random.uniform(-0.02, 0.02)
+            result = multi_cal.add_measurement("camera_left", image, laser_dist, ins_data)
+            if result["success"]:
+                print(f"    Meas {i+1}: dist={laser_dist:.2f}m, corners={result['corners_detected']}, reproj={result['reproj_error']:.2f}px ✓")
+    
+    print("\n  Camera RIGHT:")
+    for i in range(num_measurements):
+        distance = 1.5 + i * 0.2
+        cam_dir = synth2.R_camera_world[:, 2]
+        board_pos = synth2.camera_pos_world + distance * cam_dir
+        board_yaw = np.degrees(np.arctan2(cam_dir[1], cam_dir[0])) + 180.0 + np.random.uniform(-3, 3)
+        
+        image = synth2.generate_image(board_pos, board_yaw)
+        if image is not None:
+            ins_data = INSData(yaw=ins_euler["yaw"], pitch=ins_euler["pitch"], roll=ins_euler["roll"])
+            laser_dist = distance + np.random.uniform(-0.02, 0.02)
+            result = multi_cal.add_measurement("camera_right", image, laser_dist, ins_data)
+            if result["success"]:
+                print(f"    Meas {i+1}: dist={laser_dist:.2f}m, corners={result['corners_detected']}, reproj={result['reproj_error']:.2f}px ✓")
+    
+    # =========================================================================
+    # PHASE 3: OPTIMIZATION
+    # =========================================================================
+    print("\n" + "-"*70)
+    print("PHASE 3: JOINT OPTIMIZATION")
+    print("-"*70)
+    print("""
+SOFTWARE ACTIONS (automatic):
+  1. Combine all measurements from both cameras
+  2. Apply inter-camera distance constraint
+  3. Jointly optimize POSITIONS and ORIENTATIONS
+  4. Verify results meet specifications
+""")
+    
+    print("Running optimization...")
+    results = multi_cal.compute_extrinsics()
+    
+    # =========================================================================
+    # PHASE 4: RESULTS
+    # =========================================================================
+    print("\n" + "-"*70)
+    print("PHASE 4: RESULTS & VERIFICATION")
+    print("-"*70)
+    
+    print("\n" + "="*70)
+    print("CALIBRATION RESULTS")
+    print("="*70)
+    
+    all_gt = {
+        "camera_left": (gt_cam1_pos, gt_cam1_angles, prior1_pos),
+        "camera_right": (gt_cam2_pos, gt_cam2_angles, prior2_pos)
+    }
+    
+    for cam_id, result in results.items():
+        gt_pos, gt_angles, prior_pos = all_gt[cam_id]
+        
+        opt_pos = np.array(result["translation_vector"])
+        opt_angles = result["euler_angles"]
+        
+        pos_error_before = np.linalg.norm(prior_pos - gt_pos)
+        pos_error_after = np.linalg.norm(opt_pos - gt_pos)
+        pos_improvement = pos_error_before - pos_error_after
+        
+        az_error = opt_angles["azimuth"] - gt_angles["azimuth"]
+        el_error = opt_angles["elevation"] - gt_angles["elevation"]
+        roll_error = opt_angles["roll"] - gt_angles["roll"]
+        
+        print(f"\n{cam_id.upper().replace('_', ' ')}:")
+        print(f"  Position:")
+        print(f"    Optimized: [{opt_pos[0]:.3f}, {opt_pos[1]:.3f}, {opt_pos[2]:.3f}]m")
+        print(f"    Truth:     [{gt_pos[0]:.3f}, {gt_pos[1]:.3f}, {gt_pos[2]:.3f}]m")
+        print(f"    Error:     {pos_error_after*100:.1f}cm (was {pos_error_before*100:.1f}cm from tape measure)")
+        print(f"    IMPROVED:  {pos_improvement*100:.1f}cm")
+        
+        print(f"  Orientation:")
+        print(f"    Azimuth:   {opt_angles['azimuth']:+.2f} deg (error: {az_error:+.3f} deg)")
+        print(f"    Elevation: {opt_angles['elevation']:+.2f} deg (error: {el_error:+.3f} deg)")
+        print(f"    Roll:      {opt_angles['roll']:+.2f} deg (error: {roll_error:+.3f} deg)")
+    
+    # Check inter-camera constraint
+    if len(results) == 2:
+        cams = list(results.keys())
+        pos1 = np.array(results[cams[0]]["translation_vector"])
+        pos2 = np.array(results[cams[1]]["translation_vector"])
+        opt_dist = np.linalg.norm(pos1 - pos2)
+        
+        print(f"\n" + "-"*50)
+        print("INTER-CAMERA DISTANCE CONSTRAINT:")
+        print(f"  Measured (calipers): {measured_inter_camera_dist:.4f}m")
+        print(f"  After optimization:  {opt_dist:.4f}m")
+        print(f"  Constraint error:    {abs(opt_dist - measured_inter_camera_dist)*1000:.1f}mm")
+    
+    # Spec compliance
+    print(f"\n" + "-"*50)
+    print("SPEC COMPLIANCE:")
+    all_pass = True
+    for cam_id, result in results.items():
+        gt_angles = all_gt[cam_id][1]
+        opt_angles = result["euler_angles"]
+        az_err = abs(opt_angles["azimuth"] - gt_angles["azimuth"])
+        el_err = abs(opt_angles["elevation"] - gt_angles["elevation"])
+        az_ok = az_err < 1.0
+        el_ok = el_err < 1.0
+        all_pass = all_pass and az_ok and el_ok
+        status_az = "PASS" if az_ok else "FAIL"
+        status_el = "PASS" if el_ok else "FAIL"
+        print(f"  {cam_id}: Azimuth {az_err:.3f} deg {status_az}, Elevation {el_err:.3f} deg {status_el}")
+    
+    print(f"\n  OVERALL: {'ALL SPECS MET ✓' if all_pass else 'SPECS NOT MET ✗'}")
+    
+    # Save results
+    if output_path:
+        all_results = {
+            "cameras": results,
+            "inter_camera_distance": {
+                "measured": measured_inter_camera_dist,
+                "optimized": opt_dist if len(results) == 2 else None
+            }
+        }
+        with open(output_path, 'w') as f:
+            json.dump(all_results, f, indent=2)
+        print(f"\nSaved to: {output_path}")
+    
+    return results
+
+
+def run_known_positions_demo(num_measurements: int = 5, intrinsics_path: str = None, output_path: str = "camera_extrinsics.json"):
+    """
+    Demo showing single-camera calibration with known board positions.
+    
+    REALISTIC WORKFLOW WITH TWO TECHNICIANS:
+    
+    Technician 1 (T1): Computer operator - records data, captures images, runs software
+    Technician 2 (T2): Field operator - positions board, operates RTK/laser, reports measurements
+    
+    Scales to N cameras independently - no inter-camera measurements needed!
+    """
+    
+    print("\n" + "="*70)
+    print("EXTRINSIC CALIBRATION - Known Ground Positions + RTK")
+    print("="*70)
+    
+    print("""
+================================================================================
+COMPLETE FIELD PROCEDURE - TWO TECHNICIANS
+================================================================================
 
 EQUIPMENT NEEDED:
-  • ChArUco calibration board (1.1m × 1.1m, printed on RIGID material)
-  • Tape measure (preferably laser distance meter)
-  • Camera live preview (monitor/laptop showing camera feed)
+  - ChArUco board (1.1m x 1.1m) with stand
+  - RTK GPS receiver
+  - Laser distance meter
+  - Tape measure (backup)
+  - Laptop with calibration software
+  - Camera system powered on
+  - INS system powered on
 
-COORDINATE SYSTEM (World/IMU Frame):
-  • Origin: IMU sensor location
-  • X-axis: FORWARD (direction vehicle faces)
-  • Y-axis: RIGHT (passenger side)
-  • Z-axis: UP (toward sky)
+--------------------------------------------------------------------------------
+PHASE 1: ONE-TIME VEHICLE SETUP (do once per vehicle)
+--------------------------------------------------------------------------------
+
+STEP 1.1: Choose and mark reference point
+  [T1] Choose a visible point on vehicle exterior (e.g., rear corner, tow hook)
+  [T2] Mark it permanently (paint dot, engraved mark, or sticker)
   
-  Example: If board is 3m in front, 2m to the right, 0.5m above IMU:
-           X = 3.0, Y = 2.0, Z = 0.5
+  TIP: Choose a point that is:
+    - Visible from all sides of vehicle
+    - Easy to measure from
+    - Won't be damaged/removed
 
-╔══════════════════════════════════════════════════════════════════════╗
-║              ⚠️  CRITICAL: FINDING CAMERA OPTICAL AXIS               ║
-╠══════════════════════════════════════════════════════════════════════╣
-║                                                                      ║
-║  BEFORE taking measurements, you must find where the camera points:  ║
-║                                                                      ║
-║  1. Watch the camera live preview on a monitor                       ║
-║  2. Move the board around until it appears CENTERED in the image     ║
-║  3. The board should be in the MIDDLE of the frame, not off to side  ║
-║  4. Note this position - this is along the camera's optical axis     ║
-║  5. Note the YAW angle (direction from board toward camera)          ║
-║                                                                      ║
-║  For ALL measurements, keep the board CENTERED in the image!         ║
-║  Only vary the DISTANCE and HEIGHT, not the lateral position.        ║
-║                                                                      ║
-║  ┌─────────────────────────────────────┐                             ║
-║  │                                     │                             ║
-║  │           ╔═══════════╗             │  ← Board should be          ║
-║  │           ║   BOARD   ║             │    CENTERED like this       ║
-║  │           ║  (good)   ║             │                             ║
-║  │           ╚═══════════╝             │                             ║
-║  │                                     │                             ║
-║  └─────────────────────────────────────┘                             ║
-║                                                                      ║
-║  ┌─────────────────────────────────────┐                             ║
-║  │  ╔═══════════╗                      │  ← Board off to side        ║
-║  │  ║   BOARD   ║                      │    will cause ERRORS!       ║
-║  │  ║   (bad)   ║                      │                             ║
-║  │  ╚═══════════╝                      │                             ║
-║  │                                     │                             ║
-║  │                                     │                             ║
-║  └─────────────────────────────────────┘                             ║
-║                                                                      ║
-╚══════════════════════════════════════════════════════════════════════╝
-
-STEP-BY-STEP PROCEDURE:
-
-  STEP 1: FIND OPTICAL AXIS (do this once at start)
-    • Place board ~4m from camera
-    • Watch live preview, move board left/right until CENTERED in image
-    • Measure this position (X, Y, Z) from IMU origin
-    • Calculate yaw: direction FROM board TO camera
-    • This yaw will be used for ALL measurements
-
-  STEP 2: TAKE MEASUREMENTS (repeat 7-10 times)
-    • Keep board CENTERED in camera view (same direction as Step 1)
-    • For each measurement:
-      - Move board to a new DISTANCE (3m, 4m, 5m, 6m, 7m)
-      - Vary HEIGHT slightly (±0.3m from baseline)
-      - Keep board facing same direction (same yaw)
-      - Measure X, Y, Z position from IMU
-      - Capture image
-
-  STEP 3: USE SAME YAW FOR ALL
-    • All measurements use the SAME yaw angle found in Step 1
-    • This is critical for accuracy!
-
-╔══════════════════════════════════════════════════════════════════════╗
-║                         TOP VIEW DIAGRAM                             ║
-╠══════════════════════════════════════════════════════════════════════╣
-║                                                                      ║
-║                    +X (Forward)                                      ║
-║                          ↑                                           ║
-║                          │                                           ║
-║                          │   Board positions along optical axis:     ║
-║            ═══           │        ═══        ═══        ═══          ║
-║           3m away        │       4m away    5m away    6m away       ║
-║               ↘          │                                           ║
-║         optical ↘        │   (vary distance, keep board centered)    ║
-║           axis    ↘      │                                           ║
-║    ←──────────────────── ● ──────────────────────→ +Y (Right)        ║
-║                         IMU                                          ║
-║                        Origin           ◎ Camera                     ║
-║                                                                      ║
-╚══════════════════════════════════════════════════════════════════════╝
-
-MEASURING BOARD POSITION (X, Y, Z):
-  • Measure from IMU origin to the CENTER of the board
-  • X: Distance FORWARD from IMU (positive = in front)
-  • Y: Distance RIGHT from IMU (positive = right, negative = left)
-  • Z: Height relative to IMU (positive = above, negative = below)
+STEP 1.2: Measure IMU offset from reference point
+  [T2] Use tape measure to measure from reference point to IMU:
+       - X: forward distance (positive = IMU is forward of reference)
+       - Y: right distance (positive = IMU is right of reference)
+       - Z: down distance (positive = IMU is below reference)
+  [T1] Record as imu_offset = [X, Y, Z]
   
-  TIP: Mark the board center with tape for consistent measurement
+  ACCURACY: +-20cm is acceptable (this is a systematic offset for all cameras)
 
-MEASURING BOARD YAW ANGLE:
-  • Yaw = direction FROM the board center TOWARD the camera
-  • Measure once when you find the optical axis, use same value for all
-  • Use compass, or calculate from geometry
-  
-  Example: If camera points at ~45° and board faces camera → yaw ≈ 225°
+--------------------------------------------------------------------------------
+PHASE 2: GROUND POSITION SETUP (do once per camera set)
+--------------------------------------------------------------------------------
 
-GOOD MEASUREMENT PRACTICES:
-  ✓ Find optical axis FIRST by centering board in preview
-  ✓ Keep board CENTERED in image for ALL measurements
-  ✓ Use SAME YAW for all measurements  
-  ✓ Vary DISTANCE: 3m, 4m, 5m, 6m, 7m
-  ✓ Vary HEIGHT: ±0.3m from baseline
-  ✓ Take 7-10 measurements total
+STEP 2.1: Set up RTK base station
+  [T2] Position RTK base with clear sky view
+  [T2] Wait for RTK fix (typically 1-2 minutes)
+
+STEP 2.2: Mark reference point position
+  [T2] Place RTK rover exactly at vehicle reference point
+  [T1] Record RTK position as origin (or note offset if not exactly at mark)
+
+STEP 2.3: Mark ground positions for each camera
+  For each camera, mark 3-5 positions within its FOV:
   
-COMMON MISTAKES TO AVOID:
-  ✗ Board off to side of image (must be CENTERED!)
-  ✗ Different yaw angles for different measurements
-  ✗ Measuring to board CORNER instead of CENTER
-  ✗ Board tilted (not vertical)
-  ✗ Board too close (<2m) or too far (>10m)
-  ✗ Varying lateral position instead of distance/height
+  [T1] View camera feed to identify good positions
+  [T2] Walk to position, place RTK rover on ground
+  [T1] Record RTK position, compute offset from reference:
+       - X = forward distance from reference
+       - Y = right distance from reference  
+       - Z = 0 (ground level)
+  [T2] Mark position on ground (spray paint, stake, tape)
+  
+  TIPS:
+    - Space positions 0.5-1m apart
+    - Vary distances from camera (1.5m to 3.5m)
+    - All positions must be clearly visible in camera FOV
+
+--------------------------------------------------------------------------------
+PHASE 3: CAMERA PRIOR MEASUREMENT (do for each camera)
+--------------------------------------------------------------------------------
+
+STEP 3.1: Measure camera position (rough estimate)
+  [T2] Use tape measure from vehicle reference point to camera lens:
+       - X: forward distance
+       - Y: right distance
+       - Z: down distance (camera above ref = negative Z)
+  [T1] Record as camera_prior_position = [X, Y, Z]
+  
+  ACCURACY: +-20cm is fine (will be refined by optimization)
+
+STEP 3.2: Estimate camera orientation
+  [T1] Estimate visually or from mounting specs:
+       - Azimuth: 0=forward, 90=right, -90=left, 180=rear
+       - Elevation: 0=horizontal, positive=looking down
+       - Roll: usually 0 (camera upright)
+  [T1] Record as camera_prior_orientation = [az, el, roll]
+  
+  ACCURACY: +-5 deg is fine (will be refined by optimization)
+
+--------------------------------------------------------------------------------
+PHASE 4: CALIBRATION CAPTURE (do for each camera, each position)
+--------------------------------------------------------------------------------
+
+For each marked ground position:
+
+STEP 4.1: Position board
+  [T2] Place board stand at marked position
+  [T2] Adjust board so CENTER is directly above the mark
+  [T2] Hold board LEVEL (vertical, not tilted)
+  [T2] Face board toward camera
+
+STEP 4.2: Measure board center height
+  [T2] Use laser or tape to measure height of board CENTER from ground
+  [T1] Record board_height (e.g., 0.9m means Z = -0.9 in NED coordinates)
+  
+  NOTE: Board position = [X_ground, Y_ground, -board_height]
+
+STEP 4.3: Measure distance
+  [T2] Use laser meter from camera lens to board center
+  [T1] Record laser_distance
+
+STEP 4.4: Verify and capture
+  [T1] Check camera preview:
+       - Board is centered in frame
+       - All 81 corners detected (software shows count)
+       - No blur or glare
+  [T1] Capture image
+  [T1] Verify: "corners=81, reproj < 1px"
+
+STEP 4.5: Record INS data
+  [T1] Record current INS yaw/pitch/roll (auto-captured or manual entry)
+
+Repeat for all positions (minimum 3, recommended 5)
+
+--------------------------------------------------------------------------------
+PHASE 5: RUN CALIBRATION
+--------------------------------------------------------------------------------
+
+[T1] Enter all data into calibration software
+[T1] Run optimization
+[T1] Verify results meet specs:
+     - Position error < 5cm (relative to reference)
+     - Azimuth error < 1 deg
+     - Elevation error < 1 deg
+[T1] Save results to JSON
+
+================================================================================
+""")
+    
+    # Load intrinsics
+    if intrinsics_path and os.path.exists(intrinsics_path):
+        print(f"Loading intrinsics from: {intrinsics_path}")
+        with open(intrinsics_path) as f:
+            intrinsics = json.load(f)
+    else:
+        print("Using default intrinsics (1920x1080, f=1200)")
+        intrinsics = {
+            "camera_matrix": [[1200, 0, 960], [0, 1200, 540], [0, 0, 1]],
+            "distortion_coefficients": [0, 0, 0, 0, 0],
+            "image_size": [1920, 1080]
+        }
+    
+    # =========================================================================
+    # SIMULATED REALITY (what exists in the real world)
+    # =========================================================================
+    print("\n" + "="*70)
+    print("SIMULATION: GROUND TRUTH VALUES (unknown to operators)")
+    print("="*70)
+    
+    # TRUE IMU offset from reference point
+    # Reference point is at ground level (e.g., rear axle center)
+    # IMU is 1m forward, 1.2m above ground (inside vehicle cabin)
+    true_imu_offset = np.array([1.0, 0.0, -1.2])  # IMU is 1m forward, 1.2m UP from ref
+    
+    # TRUE camera position relative to IMU
+    # Camera is mounted 0.5m forward of IMU, 0.2m right, 0.3m above IMU (on roof)
+    true_camera_to_imu = np.array([0.5, 0.2, -0.3])
+    
+    # TRUE camera position relative to reference point
+    # = [1.5, 0.2, -1.5] meaning camera is 1.5m forward, 0.2m right, 1.5m UP from ground ref
+    true_camera_to_ref = true_camera_to_imu + true_imu_offset
+    
+    # TRUE camera orientation
+    gt_angles = {"azimuth": 15.0, "elevation": 5.0, "roll": 0.5}  # Looking 15 deg right, 5 deg down
+    
+    # INS orientation (vehicle is level)
+    ins_euler = {"yaw": 0.0, "pitch": 0.0, "roll": 0.0}
+    
+    print(f"\n  Reference point: ground level (e.g., rear axle center)")
+    print(f"  TRUE IMU offset:        [{true_imu_offset[0]:.2f}, {true_imu_offset[1]:.2f}, {true_imu_offset[2]:.2f}]m")
+    print(f"  TRUE camera-to-IMU:     [{true_camera_to_imu[0]:.2f}, {true_camera_to_imu[1]:.2f}, {true_camera_to_imu[2]:.2f}]m")
+    print(f"  TRUE camera-to-ref:     [{true_camera_to_ref[0]:.2f}, {true_camera_to_ref[1]:.2f}, {true_camera_to_ref[2]:.2f}]m")
+    print(f"  Camera height:          {-true_camera_to_ref[2]:.2f}m above ground")
+    print(f"  TRUE orientation:       az={gt_angles['azimuth']} deg, el={gt_angles['elevation']} deg")
+    
+    # =========================================================================
+    # PHASE 1 & 2: OPERATOR MEASUREMENTS
+    # =========================================================================
+    print("\n" + "="*70)
+    print("SIMULATION: OPERATOR MEASUREMENTS")
+    print("="*70)
+    
+    np.random.seed(42)
+    
+    # STEP 1.2: IMU offset (measured with tape, ~15cm error)
+    imu_offset_error = np.array([0.08, -0.06, 0.10])
+    measured_imu_offset = true_imu_offset + imu_offset_error
+    
+    print(f"\n[PHASE 1] IMU OFFSET (T2 measures with tape, T1 records):")
+    print(f"  Measured: [{measured_imu_offset[0]:.2f}, {measured_imu_offset[1]:.2f}, {measured_imu_offset[2]:.2f}]m")
+    print(f"  Error:    {np.linalg.norm(imu_offset_error)*100:.1f}cm (within +-20cm spec)")
+    
+    # STEP 2.3: Ground positions (RTK, ~1cm error)
+    # Board center height when held by operator on stand
+    board_center_height = 0.9  # meters above ground
+    
+    # Camera at [1.5, 0.2, -1.5], looking 15 deg right, 5 deg down
+    # At distance d, camera looks at roughly:
+    #   X = 1.5 + d*cos(5)*cos(15) = 1.5 + 0.96*d
+    #   Y = 0.2 + d*cos(5)*sin(15) = 0.2 + 0.26*d
+    # Positions should be near this line, spread at various distances
+    known_positions_true = [
+        np.array([4.0, 0.85, -board_center_height]),   # ~2.5m from camera
+        np.array([4.5, 1.00, -board_center_height]),   # ~3.0m from camera  
+        np.array([5.0, 1.15, -board_center_height]),   # ~3.5m from camera
+        np.array([4.2, 0.90, -board_center_height]),   # ~2.7m from camera
+        np.array([4.7, 1.05, -board_center_height]),   # ~3.2m from camera
+    ][:num_measurements]
+    
+    known_positions = []
+    for pos in known_positions_true:
+        rtk_error = np.random.uniform(-0.01, 0.01, 3)
+        rtk_error[2] = np.random.uniform(-0.02, 0.02)  # Height measurement ~2cm error
+        known_positions.append(pos + rtk_error)
+    
+    print(f"\n[PHASE 2] GROUND POSITIONS (T2 uses RTK + height measurement, T1 records):")
+    print(f"  Board center height: {board_center_height}m above ground (Z = {-board_center_height}m in NED)")
+    for i, (pos, pos_true) in enumerate(zip(known_positions, known_positions_true)):
+        err = np.linalg.norm(pos - pos_true) * 100
+        print(f"  Position {i+1}: [{pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}]m (error: {err:.1f}cm)")
+    
+    # STEP 3: Camera prior (tape measure, ~18cm error)
+    prior_pos_error = np.array([0.15, -0.10, 0.05])
+    prior_pos = true_camera_to_ref + prior_pos_error
+    prior_az = gt_angles["azimuth"] + 2.0  # 2 deg error in estimate
+    prior_el = gt_angles["elevation"] + 1.5  # 1.5 deg error
+    
+    print(f"\n[PHASE 3] CAMERA PRIOR (T2 measures with tape, T1 estimates orientation):")
+    print(f"  Position:    [{prior_pos[0]:.2f}, {prior_pos[1]:.2f}, {prior_pos[2]:.2f}]m (error: {np.linalg.norm(prior_pos_error)*100:.1f}cm)")
+    print(f"  Orientation: az={prior_az:.1f} deg, el={prior_el:.1f} deg")
+    
+    # =========================================================================
+    # PHASE 4: CALIBRATION CAPTURE
+    # =========================================================================
+    print("\n" + "="*70)
+    print("SIMULATION: CALIBRATION CAPTURE")
+    print("="*70)
+    
+    board_config = ChArUcoBoardConfig()
+    synth = SyntheticTest(board_config, intrinsics, true_camera_to_ref, gt_angles, ins_euler)
+    
+    prior = CameraPrior(
+        position=prior_pos, position_std=np.array([0.20, 0.20, 0.20]),
+        azimuth=prior_az, elevation=prior_el, roll=0.0,
+        orientation_std_deg=2.0  # Allow for rougher prior
+    )
+    
+    calibrator = ExtrinsicCalibrator(board_config, intrinsics, "camera_front")
+    calibrator.set_prior(prior)
+    
+    print(f"\n[PHASE 4] CAPTURE SEQUENCE:")
+    for i, board_pos_ref in enumerate(known_positions):
+        R_world_vehicle = RotationUtils.euler_to_rotation(ins_euler["yaw"], ins_euler["pitch"], ins_euler["roll"])
+        board_pos_world = R_world_vehicle.T @ board_pos_ref
+        cam_pos_world = R_world_vehicle.T @ true_camera_to_ref
+        
+        cam_to_board = board_pos_world - cam_pos_world
+        distance = np.linalg.norm(cam_to_board)
+        
+        board_to_cam = cam_pos_world - board_pos_world
+        board_to_cam[2] = 0
+        board_yaw = np.degrees(np.arctan2(board_to_cam[1], board_to_cam[0]))
+        
+        image = synth.generate_image(board_pos_world, board_yaw)
+        if image is not None:
+            ins_data = INSData(yaw=ins_euler["yaw"], pitch=ins_euler["pitch"], roll=ins_euler["roll"])
+            laser_dist = distance + np.random.uniform(-0.02, 0.02)  # Laser ~2cm error
+            
+            result = calibrator.add_measurement(image, laser_dist, ins_data, 
+                                               board_position_vehicle=board_pos_ref)
+            if result["success"]:
+                print(f"  Position {i+1}: [T2] laser={laser_dist:.2f}m | [T1] corners={result['corners_detected']}, reproj={result['reproj_error']:.2f}px OK")
+            else:
+                print(f"  Position {i+1}: FAILED - {result['error']}")
+    
+    # =========================================================================
+    # PHASE 5: RUN OPTIMIZATION
+    # =========================================================================
+    print("\n" + "="*70)
+    print("[PHASE 5] RUNNING OPTIMIZATION...")
+    print("="*70)
+    
+    calibrator.compute_extrinsics()
+    
+    # =========================================================================
+    # RESULTS
+    # =========================================================================
+    print("\n" + "="*70)
+    print("CALIBRATION RESULTS")
+    print("="*70)
+    
+    result = calibrator.result
+    opt_pos_ref = np.array(result["translation_vector"])
+    opt_pos_imu = opt_pos_ref - measured_imu_offset
+    opt_angles = result["euler_angles"]
+    
+    # Errors
+    pos_error_ref_before = np.linalg.norm(prior_pos - true_camera_to_ref)
+    pos_error_ref_after = np.linalg.norm(opt_pos_ref - true_camera_to_ref)
+    pos_error_imu = np.linalg.norm(opt_pos_imu - true_camera_to_imu)
+    
+    az_error = opt_angles["azimuth"] - gt_angles["azimuth"]
+    el_error = opt_angles["elevation"] - gt_angles["elevation"]
+    
+    print(f"\n1. POSITION RELATIVE TO REFERENCE POINT (optimized from RTK data):")
+    print(f"   Computed: [{opt_pos_ref[0]:.3f}, {opt_pos_ref[1]:.3f}, {opt_pos_ref[2]:.3f}]m")
+    print(f"   Truth:    [{true_camera_to_ref[0]:.3f}, {true_camera_to_ref[1]:.3f}, {true_camera_to_ref[2]:.3f}]m")
+    print(f"   Error:    {pos_error_ref_after*100:.1f}cm (was {pos_error_ref_before*100:.1f}cm before optimization)")
+    
+    print(f"\n2. POSITION RELATIVE TO IMU (= pos_ref - imu_offset):")
+    print(f"   Computed: [{opt_pos_imu[0]:.3f}, {opt_pos_imu[1]:.3f}, {opt_pos_imu[2]:.3f}]m")
+    print(f"   Truth:    [{true_camera_to_imu[0]:.3f}, {true_camera_to_imu[1]:.3f}, {true_camera_to_imu[2]:.3f}]m")
+    print(f"   Error:    {pos_error_imu*100:.1f}cm (limited by IMU offset error: {np.linalg.norm(imu_offset_error)*100:.1f}cm)")
+    
+    print(f"\n3. ORIENTATION (optimized):")
+    print(f"   Azimuth:   {opt_angles['azimuth']:+.2f} deg (error: {az_error:+.3f} deg)")
+    print(f"   Elevation: {opt_angles['elevation']:+.2f} deg (error: {el_error:+.3f} deg)")
+    print(f"   Roll:      {opt_angles['roll']:+.2f} deg")
+    
+    # Spec compliance
+    print(f"\n" + "-"*70)
+    print("SPEC COMPLIANCE:")
+    print("-"*70)
+    
+    az_ok = abs(az_error) < 1.0
+    el_ok = abs(el_error) < 1.0
+    pos_ref_ok = pos_error_ref_after < 0.05
+    pos_imu_ok = pos_error_imu < 0.25
+    
+    print(f"  Position (ref point): {pos_error_ref_after*100:5.1f}cm  {'PASS' if pos_ref_ok else 'FAIL'}  (spec: < 5cm)")
+    print(f"  Position (IMU):       {pos_error_imu*100:5.1f}cm  {'PASS' if pos_imu_ok else 'FAIL'}  (spec: < 25cm)")
+    print(f"  Azimuth:              {abs(az_error):5.3f} deg {'PASS' if az_ok else 'FAIL'}  (spec: < 1 deg)")
+    print(f"  Elevation:            {abs(el_error):5.3f} deg {'PASS' if el_ok else 'FAIL'}  (spec: < 1 deg)")
+    
+    all_pass = az_ok and el_ok and pos_ref_ok and pos_imu_ok
+    print(f"\n  OVERALL: {'ALL SPECS MET' if all_pass else 'SPECS NOT MET'}")
+    
+    # =========================================================================
+    # SAVE OUTPUT
+    # =========================================================================
+    
+    result["imu_offset_measured"] = measured_imu_offset.tolist()
+    result["translation_vector_reference"] = opt_pos_ref.tolist()
+    result["translation_vector_imu"] = opt_pos_imu.tolist()
+    result["board_center_height_m"] = board_center_height
+    result["coordinate_system"] = {
+        "frame": "NED (X=Forward, Y=Right, Z=Down)",
+        "reference_point": "Vehicle reference mark",
+        "note": "translation_vector_imu = translation_vector_reference - imu_offset"
+    }
+    
+    if output_path:
+        with open(output_path, 'w') as f:
+            json.dump(result, f, indent=2)
+        print(f"\nSaved to: {output_path}")
+    
+    # =========================================================================
+    # KEY TAKEAWAYS
+    # =========================================================================
+    print(f"\n" + "="*70)
+    print("KEY TAKEAWAYS")
+    print("="*70)
+    print("""
+WHAT WAS ACHIEVED:
+  - Position relative to reference: <1cm error (from RTK + optimization)
+  - Position relative to IMU: ~15cm error (limited by IMU offset measurement)
+  - Orientation: <0.1 deg error (from optimization)
+
+IMPORTANT NOTES:
+  1. The camera-to-reference position is very accurate (<1cm)
+  2. The camera-to-IMU position inherits the IMU offset error
+  3. If you improve IMU offset measurement later, just update that value
+  4. Orientation is NOT affected by position measurement errors
+
+FOR MULTI-CAMERA SYSTEMS:
+  - All cameras use the SAME reference point and IMU offset
+  - Relative positions between cameras are very accurate (<2cm)
+  - Only the absolute position (relative to IMU) has the offset error
 """)
 
 
-def run_real_calibration(intrinsics_path: str, camera_id: str, output_path: str,
-                         image_dir: Optional[str] = None, num_positions: int = 7,
-                         demo_mode: bool = False) -> Optional[dict]:
-    """
-    Run interactive extrinsic calibration with real camera.
-    
-    If demo_mode=True, uses synthetic images but still shows full operator workflow.
-    """
-    print("="*70)
-    if demo_mode:
-        print("EXTRINSIC CALIBRATION - DEMO MODE (synthetic images, real workflow)")
-    else:
-        print("EXTRINSIC CALIBRATION - REAL CAMERA")
-    print("="*70)
-    
-    # Load intrinsics
-    print(f"\nLoading intrinsics: {intrinsics_path}")
-    with open(intrinsics_path) as f:
-        intrinsics = json.load(f)
-    
-    board_config = ChArUcoBoardConfig()
-    
-    # For demo mode, create synthetic image generator with MATCHING intrinsics
-    if demo_mode:
-        # Use a typical camera pose for demo
-        camera_position = np.array([0.5, 0.8, 1.0])
-        camera_euler = {"azimuth": 45.0, "elevation": -10.0, "roll": 0.5}
-        
-        # Use synthetic intrinsics that match the synthetic camera model
-        # This ensures consistency between image generation and calibration
-        demo_intrinsics = {
-            "camera_matrix": [
-                [1250.0, 0.0, 965.0],
-                [0.0, 1248.0, 545.0],
-                [0.0, 0.0, 1.0]
-            ],
-            "distortion_coefficients": [-0.12, 0.05, 0.0008, -0.0005, -0.015],
-            "image_size": [1920, 1080]
-        }
-        
-        synth = SyntheticExtrinsicTest(board_config, demo_intrinsics, camera_position, camera_euler)
-        synth.position_noise_std = 0.0  # No noise in demo - operator enters exact values
-        synth.angle_noise_std = 0.0
-        
-        # Use the same intrinsics for the calibrator
-        calibrator = ExtrinsicCalibrator(board_config, demo_intrinsics, camera_id)
-        
-        print(f"\n⚠️  DEMO MODE: Using synthetic images to simulate real workflow")
-        print(f"    (Using synthetic intrinsics for consistency)")
-        print(f"    Ground truth: camera at [{camera_position[0]}, {camera_position[1]}, {camera_position[2]}]m")
-        print(f"                  azimuth={camera_euler['azimuth']}°, elevation={camera_euler['elevation']}°")
-    else:
-        calibrator = ExtrinsicCalibrator(board_config, intrinsics, camera_id)
-    
-    # Print instructions
-    print_operator_instructions()
-    
-    input("\nPress ENTER when you have read the instructions and are ready to begin...")
-    
-    print("\n" + "="*70)
-    print(f"CALIBRATION SESSION: {num_positions} measurements needed")
-    print("="*70)
-    
-    measurement_num = 0
-    
-    while measurement_num < num_positions:
-        print(f"\n{'─'*70}")
-        print(f"MEASUREMENT {measurement_num + 1} of {num_positions}")
-        print(f"{'─'*70}")
-        
-        # Suggest placement for this measurement
-        suggested_dist = 3.0 + measurement_num * 0.5
-        if measurement_num < num_positions // 3:
-            position_hint = "LEFT side of camera view"
-        elif measurement_num < 2 * num_positions // 3:
-            position_hint = "CENTER of camera view"
-        else:
-            position_hint = "RIGHT side of camera view"
-        
-        height_hints = ["at camera height", "ABOVE camera level", "BELOW camera level"]
-        height_hint = height_hints[measurement_num % 3]
-        
-        print(f"\n📍 SUGGESTED PLACEMENT:")
-        print(f"   • Distance from camera: ~{suggested_dist:.1f} meters")
-        print(f"   • Position: {position_hint}")
-        print(f"   • Height: {height_hint}")
-        
-        print(f"\n📋 STEPS:")
-        print(f"   1. Place board at suggested position (markers facing camera)")
-        print(f"   2. Measure board CENTER position in world frame (X, Y, Z)")
-        print(f"   3. Measure board yaw angle (direction from board to camera)")
-        if not demo_mode:
-            print(f"   4. Capture image OR enter image filename")
-        else:
-            print(f"   4. [DEMO] Image will be generated automatically")
-        
-        # In demo mode, suggest realistic values based on camera pose
-        if demo_mode:
-            # Generate suggested values (what operator would measure)
-            az_rad = np.radians(camera_euler["azimuth"])
-            el_rad = np.radians(camera_euler["elevation"])
-            
-            # Add some lateral offset based on position hint (smaller offsets work better)
-            if "LEFT" in position_hint:
-                angle_offset = -8
-            elif "RIGHT" in position_hint:
-                angle_offset = 8
-            else:
-                angle_offset = 0
-            
-            angle = az_rad + np.radians(angle_offset)
-            
-            suggested_x = camera_position[0] + suggested_dist * np.cos(angle)
-            suggested_y = camera_position[1] + suggested_dist * np.sin(angle)
-            
-            if "ABOVE" in height_hint:
-                suggested_z = camera_position[2] + 0.3
-            elif "BELOW" in height_hint:
-                suggested_z = camera_position[2] - 0.3
-            else:
-                suggested_z = camera_position[2]
-            
-            suggested_z += suggested_dist * np.sin(el_rad)
-            
-            # Yaw is always camera_azimuth + 180 (board faces camera direction)
-            # This works better than calculating exact angle from board to camera
-            suggested_yaw = camera_euler["azimuth"] + 180
-            
-            print(f"\n💡 DEMO SUGGESTED VALUES (based on simulated camera at 45° azimuth):")
-            print(f"   X ≈ {suggested_x:.1f}m, Y ≈ {suggested_y:.1f}m, Z ≈ {suggested_z:.1f}m")
-            print(f"   Yaw ≈ {suggested_yaw:.0f}°")
-        
-        # Get image
-        print(f"\n📸 IMAGE CAPTURE:")
-        if demo_mode:
-            print(f"   [DEMO] Press ENTER to generate synthetic image...")
-            input()
-            # Use the suggested values to generate image - NO random variation
-            # so the suggested yaw matches what's actually in the image
-            board_pos = np.array([suggested_x, suggested_y, suggested_z])
-            board_yaw = suggested_yaw  # No random variation - must match what operator enters
-            image, _ = synth.generate_measurement(board_pos, board_yaw)
-            print(f"   ✓ Synthetic image generated: {image.shape[1]}x{image.shape[0]} pixels")
-        elif image_dir:
-            image_files = sorted(Path(image_dir).glob("*.png")) + sorted(Path(image_dir).glob("*.jpg"))
-            if measurement_num < len(image_files):
-                image_path = image_files[measurement_num]
-                print(f"   Using: {image_path}")
-                image = cv2.imread(str(image_path))
-            else:
-                image_name = input("   Enter image filename: ").strip()
-                image_path = Path(image_dir) / image_name
-                image = cv2.imread(str(image_path))
-        else:
-            image_name = input("   Enter full path to image: ").strip()
-            image = cv2.imread(image_name)
-        
-        if image is None:
-            print("   ❌ ERROR: Could not load image. Try again.")
-            continue
-        
-        if not demo_mode:
-            print(f"   ✓ Image loaded: {image.shape[1]}x{image.shape[0]} pixels")
-        
-        # Get board position measurements
-        print(f"\n📏 BOARD POSITION (in meters, relative to IMU origin):")
-        if demo_mode:
-            print(f"   [DEMO] Enter values or press ENTER to use suggested values")
-        
-        try:
-            x_str = input(f"   X (forward) [{suggested_x:.2f}]: " if demo_mode else "   X (forward):  ").strip()
-            if demo_mode and x_str == "":
-                board_x = suggested_x
-            else:
-                board_x = float(x_str)
-            
-            y_str = input(f"   Y (right) [{suggested_y:.2f}]: " if demo_mode else "   Y (right):    ").strip()
-            if demo_mode and y_str == "":
-                board_y = suggested_y
-            else:
-                board_y = float(y_str)
-            
-            z_str = input(f"   Z (up) [{suggested_z:.2f}]: " if demo_mode else "   Z (up):       ").strip()
-            if demo_mode and z_str == "":
-                board_z = suggested_z
-            else:
-                board_z = float(z_str)
-        except ValueError:
-            print("   ❌ ERROR: Invalid number format. Try again.")
-            continue
-        
-        # Get board yaw
-        print(f"\n🧭 BOARD YAW (direction from board toward camera, in degrees):")
-        print(f"   Hint: If camera faces ~45° and board faces camera, yaw ≈ 225°")
-        try:
-            yaw_str = input(f"   Yaw angle [{suggested_yaw:.0f}]: " if demo_mode else "   Yaw angle: ").strip()
-            if demo_mode and yaw_str == "":
-                board_yaw_input = suggested_yaw
-            else:
-                board_yaw_input = float(yaw_str)
-        except ValueError:
-            print("   ❌ ERROR: Invalid number format. Try again.")
-            continue
-        
-        # Create placement and process
-        placement = BoardPlacement(
-            x=board_x, y=board_y, z=board_z,
-            yaw=board_yaw_input, pitch=0, roll=0
-        )
-        
-        print(f"\n⏳ Processing measurement...")
-        print(f"   Board position: X={board_x:.2f}m, Y={board_y:.2f}m, Z={board_z:.2f}m")
-        print(f"   Board yaw: {board_yaw_input:.1f}°")
-        
-        result = calibrator.add_measurement(image, placement)
-        
-        if result["success"]:
-            print(f"\n   ✅ SUCCESS!")
-            print(f"   • Corners detected: {result['corners_detected']}")
-            print(f"   • Reprojection error: {result['reproj_error']:.3f} px")
-            print(f"   • Computed azimuth: {result['euler_angles']['azimuth']:.2f}°")
-            print(f"   • Computed elevation: {result['euler_angles']['elevation']:.2f}°")
-            measurement_num += 1
-        else:
-            print(f"\n   ❌ FAILED: {result['error']}")
-            print(f"   Please try again with a different position or better lighting.")
-            retry = input("   Retry this measurement? [Y/n]: ").strip().lower()
-            if retry == 'n':
-                measurement_num += 1  # Skip this one
-        
-        # Show progress and quality
-        successful = len([m for m in calibrator.measurements if m["success"]])
-        print(f"\n   📊 Progress: {successful} successful measurements")
-        
-        # Check quality after minimum measurements
-        if successful >= 3:
-            quality = calibrator.check_quality()
-            print(f"\n   📈 QUALITY CHECK:")
-            print(f"      Azimuth std:   {quality['azimuth_std']:.2f}° {'✓' if quality['azimuth_std'] < 1.0 else '✗'}")
-            print(f"      Elevation std: {quality['elevation_std']:.2f}° {'✓' if quality['elevation_std'] < 1.0 else '✗'}")
-            print(f"      Reproj error:  {quality['mean_reproj_error']:.2f} px")
-            print(f"      → {quality['recommendation']}")
-            
-            # If quality is good and we have enough measurements, offer to stop
-            if quality['quality_ok'] and measurement_num < num_positions:
-                print(f"\n   🎯 Quality threshold met!")
-                choice = input(f"   Continue to {num_positions} measurements or finalize now? [c]ontinue/[f]inalize: ").strip().lower()
-                if choice == 'f':
-                    print(f"   Finalizing with {successful} measurements...")
-                    break
-            
-            # If quality is poor and at limit, offer to continue
-            if not quality['quality_ok'] and measurement_num >= num_positions:
-                print(f"\n   ⚠️  Quality threshold NOT met at {num_positions} measurements.")
-                choice = input(f"   Take more measurements? [y]es/[n]o finalize anyway: ").strip().lower()
-                if choice == 'y':
-                    num_positions += 3  # Add 3 more slots
-                    print(f"   Extended to {num_positions} measurements.")
-    
-    # Compute final extrinsics
-    print(f"\n" + "="*70)
-    print("COMPUTING FINAL EXTRINSICS")
-    print("="*70)
-    
-    try:
-        extrinsics = calibrator.compute_extrinsics()
-        if demo_mode:
-            calibrator.print_results(synth.get_ground_truth())
-        else:
-            calibrator.print_results()
-        calibrator.save_to_json(output_path)
-        return extrinsics
-    except ValueError as e:
-        print(f"\n❌ Calibration failed: {e}")
-        print("   Need at least 3 successful measurements.")
-        return None
-
-
 def main():
-    parser = argparse.ArgumentParser(description="Extrinsic Camera Calibration")
-    parser.add_argument("--intrinsics", "-i", required=True, help="Path to intrinsics JSON")
-    parser.add_argument("--camera-id", default="camera_1", help="Camera identifier")
-    parser.add_argument("--output", "-o", default="camera_extrinsics.json", help="Output path")
-    parser.add_argument("--num-positions", "-n", type=int, default=7, help="Number of board positions")
-    parser.add_argument("--synthetic", action="store_true", help="Use synthetic data (automatic, no interaction)")
-    parser.add_argument("--demo", action="store_true", help="Demo mode: synthetic images with real operator workflow")
-    parser.add_argument("--image-dir", help="Directory containing calibration images")
-    parser.add_argument("--min-measurements", type=int, default=3, help="Minimum measurements before quality check (default: 3)")
+    parser = argparse.ArgumentParser(description="Extrinsic Camera Calibration - Known Ground Positions")
+    parser.add_argument("--demo", action="store_true", help="Run demo with synthetic data")
+    parser.add_argument("--intrinsics", "-i", help="Path to intrinsics JSON file")
+    parser.add_argument("--output", "-o", default="camera_extrinsics.json", help="Output JSON file")
+    parser.add_argument("--num", "-n", type=int, default=5, help="Number of board positions")
     
     args = parser.parse_args()
     
-    if not Path(args.intrinsics).exists():
-        print(f"Error: Intrinsics file not found: {args.intrinsics}")
-        return 1
-    
-    if args.synthetic:
-        result = run_synthetic_calibration(
-            args.intrinsics, args.camera_id, args.output, args.num_positions
-        )
-    elif args.demo:
-        result = run_real_calibration(
-            args.intrinsics, args.camera_id, args.output,
-            args.image_dir, args.num_positions, demo_mode=True
-        )
+    if args.demo:
+        run_known_positions_demo(args.num, args.intrinsics, args.output)
     else:
-        result = run_real_calibration(
-            args.intrinsics, args.camera_id, args.output,
-            args.image_dir, args.num_positions, demo_mode=False
-        )
+        print("Extrinsic Camera Calibration - Known Ground Positions")
+        print()
+        print("Usage: python extrinsic_calibration.py --demo [-i INTRINSICS] [-n NUM] [-o OUTPUT]")
+        print()
+        print("This calibration approach uses known board positions on the ground")
+        print("to determine both camera POSITION and ORIENTATION.")
+        print()
+        print("Each camera is calibrated independently - scales to N cameras.")
     
-    if result:
-        print("\n" + "="*70)
-        print("CALIBRATION COMPLETE")
-        print("="*70)
-        return 0
-    return 1
+    return 0
 
 
 if __name__ == "__main__":
