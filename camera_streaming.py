@@ -137,10 +137,56 @@ class CameraConnectivity:
         """Test network connectivity using ping"""
         print_status(f"Pinging {self.config.ip}...", "info")
 
+        # Try to find ping command
+        ping_cmd = None
+        for path in ["/bin/ping", "/usr/bin/ping", "ping"]:
+            try:
+                result = subprocess.run(
+                    [path, "-c", "1", "-W", "1", "127.0.0.1"],
+                    capture_output=True,
+                    timeout=3
+                )
+                if result.returncode == 0:
+                    ping_cmd = path
+                    break
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                continue
+
+        if not ping_cmd:
+            # Ping not available - fall back to socket test
+            print_status("Ping command not available, using socket test...", "info")
+            try:
+                start = time.time()
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(2.0)
+                result = sock.connect_ex((self.config.ip, self.config.api_port))
+                latency = (time.time() - start) * 1000
+                sock.close()
+
+                if result == 0:
+                    return DiagnosticResult(
+                        test_name="Ping Test",
+                        passed=True,
+                        message=f"Camera reachable at {self.config.ip} (via socket)",
+                        latency_ms=latency
+                    )
+                else:
+                    return DiagnosticResult(
+                        test_name="Ping Test",
+                        passed=False,
+                        message=f"Camera unreachable at {self.config.ip}"
+                    )
+            except Exception as e:
+                return DiagnosticResult(
+                    test_name="Ping Test",
+                    passed=False,
+                    message=f"Connectivity test failed: {str(e)}"
+                )
+
         try:
             # Use system ping command
             result = subprocess.run(
-                ["ping", "-c", str(count), "-W", "2", self.config.ip],
+                [ping_cmd, "-c", str(count), "-W", "2", self.config.ip],
                 capture_output=True,
                 text=True,
                 timeout=count * 3 + 5
@@ -187,92 +233,100 @@ class CameraConnectivity:
                 message=f"Ping failed: {str(e)}"
             )
 
-    def port_check(self) -> DiagnosticResult:
+    def port_check(self, retries: int = 2) -> DiagnosticResult:
         """Check if API port is open"""
         print_status(f"Checking port {self.config.api_port}...", "info")
 
-        try:
-            start = time.time()
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(self.config.timeout)
-            result = sock.connect_ex((self.config.ip, self.config.api_port))
-            latency = (time.time() - start) * 1000
-            sock.close()
+        last_error = None
+        for attempt in range(retries + 1):
+            try:
+                start = time.time()
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(self.config.timeout)
+                result = sock.connect_ex((self.config.ip, self.config.api_port))
+                latency = (time.time() - start) * 1000
+                sock.close()
 
-            if result == 0:
-                return DiagnosticResult(
-                    test_name="Port Check",
-                    passed=True,
-                    message=f"Port {self.config.api_port} is open",
-                    latency_ms=latency
-                )
-            else:
-                return DiagnosticResult(
-                    test_name="Port Check",
-                    passed=False,
-                    message=f"Port {self.config.api_port} is closed or filtered"
-                )
+                if result == 0:
+                    return DiagnosticResult(
+                        test_name="Port Check",
+                        passed=True,
+                        message=f"Port {self.config.api_port} is open",
+                        latency_ms=latency
+                    )
+                else:
+                    last_error = f"Port {self.config.api_port} is closed or filtered"
+                    if attempt < retries:
+                        time.sleep(0.5)  # Brief delay before retry
+                        continue
 
-        except socket.timeout:
-            return DiagnosticResult(
-                test_name="Port Check",
-                passed=False,
-                message="Connection timed out"
-            )
-        except Exception as e:
-            return DiagnosticResult(
-                test_name="Port Check",
-                passed=False,
-                message=f"Port check failed: {str(e)}"
-            )
+            except socket.timeout:
+                last_error = "Connection timed out"
+                if attempt < retries:
+                    time.sleep(0.5)
+                    continue
+            except Exception as e:
+                last_error = f"Port check failed: {str(e)}"
+                if attempt < retries:
+                    time.sleep(0.5)
+                    continue
+
+        return DiagnosticResult(
+            test_name="Port Check",
+            passed=False,
+            message=last_error or f"Port {self.config.api_port} is closed or filtered"
+        )
 
     def api_health_check(self) -> DiagnosticResult:
         """Check if camera API is responding"""
         print_status(f"Testing API at {self.config.base_url}...", "info")
 
-        try:
-            start = time.time()
-            response = requests.get(
-                self.config.base_url,
-                timeout=self.config.timeout
-            )
-            latency = (time.time() - start) * 1000
+        # Try multiple endpoints - some APIs don't respond at root
+        endpoints_to_try = [
+            (self.config.base_url, "GET"),
+            (self.config.stream_stop_url, "POST"),  # Safe to call even if not streaming
+        ]
 
-            if response.status_code == 200:
+        last_error = None
+        for url, method in endpoints_to_try:
+            try:
+                start = time.time()
+                if method == "GET":
+                    response = requests.get(url, timeout=self.config.timeout)
+                else:
+                    response = requests.post(
+                        url,
+                        headers={"Content-Type": "application/json"},
+                        timeout=self.config.timeout
+                    )
+                latency = (time.time() - start) * 1000
+
+                # Any response means API is alive
                 return DiagnosticResult(
                     test_name="API Health",
                     passed=True,
                     message="Camera API is responding",
-                    details=f"Status: {response.status_code}",
-                    latency_ms=latency
-                )
-            else:
-                return DiagnosticResult(
-                    test_name="API Health",
-                    passed=True,  # API responded, just not 200
-                    message=f"API responded with status {response.status_code}",
+                    details=f"Status: {response.status_code} from {url}",
                     latency_ms=latency
                 )
 
-        except requests.exceptions.ConnectionError as e:
-            return DiagnosticResult(
-                test_name="API Health",
-                passed=False,
-                message="Cannot connect to camera API",
-                details=str(e)
-            )
-        except requests.exceptions.Timeout:
-            return DiagnosticResult(
-                test_name="API Health",
-                passed=False,
-                message="API request timed out"
-            )
-        except Exception as e:
-            return DiagnosticResult(
-                test_name="API Health",
-                passed=False,
-                message=f"API check failed: {str(e)}"
-            )
+            except requests.exceptions.ConnectionError as e:
+                last_error = f"Cannot connect to camera API: {str(e)}"
+                continue
+            except requests.exceptions.Timeout:
+                last_error = "API request timed out"
+                continue
+            except Exception as e:
+                last_error = f"API check failed: {str(e)}"
+                continue
+
+        # All endpoints failed
+        return DiagnosticResult(
+            test_name="API Health",
+            passed=False,
+            message=last_error or "Cannot connect to camera API",
+            details="Tried multiple API endpoints"
+        )
 
     def multicast_check(self) -> DiagnosticResult:
         """Check if system supports multicast"""
@@ -322,23 +376,47 @@ class CameraConnectivity:
         """Check if GStreamer is installed with required plugins"""
         print_status("Checking GStreamer installation...", "info")
 
+        # Try to find gst-launch-1.0 in common locations
+        gst_launch = None
+        gst_inspect = None
+        search_paths = [
+            "/usr/bin/gst-launch-1.0",
+            "/usr/local/bin/gst-launch-1.0",
+            "gst-launch-1.0"
+        ]
+
+        for path in search_paths:
+            try:
+                result = subprocess.run(
+                    [path, "--version"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if result.returncode == 0:
+                    gst_launch = path
+                    # Derive gst-inspect path from gst-launch path
+                    gst_inspect = path.replace("gst-launch-1.0", "gst-inspect-1.0")
+                    break
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                continue
+
+        if not gst_launch:
+            return DiagnosticResult(
+                test_name="GStreamer Check",
+                passed=False,
+                message="GStreamer not found",
+                details="Install with: sudo apt install gstreamer1.0-tools gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav"
+            )
+
         try:
-            # Check gst-launch-1.0
+            # Get version
             result = subprocess.run(
-                ["gst-launch-1.0", "--version"],
+                [gst_launch, "--version"],
                 capture_output=True,
                 text=True,
                 timeout=5
             )
-
-            if result.returncode != 0:
-                return DiagnosticResult(
-                    test_name="GStreamer Check",
-                    passed=False,
-                    message="GStreamer not found",
-                    details="Install with: sudo apt install gstreamer1.0-tools gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav"
-                )
-
             version = result.stdout.split('\n')[0] if result.stdout else "Unknown"
 
             # Check for required plugins
@@ -346,12 +424,15 @@ class CameraConnectivity:
             missing = []
 
             for plugin in required_plugins:
-                check = subprocess.run(
-                    ["gst-inspect-1.0", plugin],
-                    capture_output=True,
-                    timeout=5
-                )
-                if check.returncode != 0:
+                try:
+                    check = subprocess.run(
+                        [gst_inspect, plugin],
+                        capture_output=True,
+                        timeout=5
+                    )
+                    if check.returncode != 0:
+                        missing.append(plugin)
+                except (FileNotFoundError, subprocess.TimeoutExpired):
                     missing.append(plugin)
 
             if missing:
