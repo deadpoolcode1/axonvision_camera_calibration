@@ -812,42 +812,42 @@ def run_calibration_mode(config: CameraConfig):
         cv2.namedWindow("Calibration", cv2.WINDOW_NORMAL)
         cv2.resizeWindow("Calibration", 1280, 720)
 
-        captured_images = []
+        captured_count = 0
         target_images = 25
 
         print(f"Capture {target_images} images of the ChArUco board from different angles.")
         print("Press SPACE to capture, Q to finish early.\n")
 
-        while len(captured_images) < target_images:
+        # Track current detection for capture
+        current_corners = None
+        current_ids = None
+
+        while captured_count < target_images:
             frame = source.get_image()
 
             if frame is None:
                 time.sleep(0.1)
                 continue
 
-            # Try to detect ChArUco board
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            corners, ids = detector.detect_markers(gray)
+            # Detect ChArUco board using the unified detect() method
+            charuco_corners, charuco_ids, display = detector.detect(frame)
 
-            display = frame.copy()
+            # Store current detection for potential capture
+            current_corners = charuco_corners
+            current_ids = charuco_ids
 
-            if corners is not None and ids is not None and len(ids) > 0:
-                cv2.aruco.drawDetectedMarkers(display, corners, ids)
-                charuco_corners, charuco_ids = detector.detect_charuco(gray, corners, ids)
-
-                if charuco_corners is not None and len(charuco_corners) > 10:
-                    cv2.aruco.drawDetectedCornersCharuco(display, charuco_corners, charuco_ids)
-                    status_text = f"Detected {len(charuco_corners)} corners - Press SPACE to capture"
-                    color = (0, 255, 0)
-                else:
-                    status_text = "Move board closer or adjust angle"
-                    color = (0, 165, 255)
+            if charuco_corners is not None and len(charuco_corners) > 10:
+                status_text = f"Detected {len(charuco_corners)} corners - Press SPACE to capture"
+                color = (0, 255, 0)
+            elif charuco_corners is not None:
+                status_text = "Move board closer or adjust angle"
+                color = (0, 165, 255)
             else:
                 status_text = "No board detected - Show ChArUco board to camera"
                 color = (0, 0, 255)
 
             # Overlay status
-            cv2.putText(display, f"Captured: {len(captured_images)}/{target_images}",
+            cv2.putText(display, f"Captured: {captured_count}/{target_images}",
                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
             cv2.putText(display, status_text,
                        (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
@@ -856,37 +856,40 @@ def run_calibration_mode(config: CameraConfig):
 
             key = cv2.waitKey(1) & 0xFF
 
-            if key == ord(' ') and charuco_corners is not None and len(charuco_corners) > 10:
-                captured_images.append(frame.copy())
-                print_status(f"Captured image {len(captured_images)}/{target_images}", "ok")
-                time.sleep(0.3)  # Debounce
+            if key == ord(' ') and current_corners is not None and len(current_corners) > 10:
+                # Add detection to calibrator
+                image_size = (frame.shape[1], frame.shape[0])
+                if calibrator.add_detection(current_corners, current_ids, image_size):
+                    captured_count += 1
+                    print_status(f"Captured image {captured_count}/{target_images}", "ok")
+                    time.sleep(0.3)  # Debounce
+                else:
+                    print_status("Detection rejected - try a different angle", "warn")
 
             elif key in [ord('q'), ord('Q'), 27]:
-                if len(captured_images) >= 5:
+                if captured_count >= 10:
                     break
                 else:
-                    print_status("Need at least 5 images for calibration", "warn")
+                    print_status("Need at least 10 images for calibration", "warn")
 
         cv2.destroyAllWindows()
         source.release()
 
-        if len(captured_images) < 5:
-            print_status("Not enough images captured", "error")
+        if captured_count < 10:
+            print_status("Not enough images captured (need at least 10)", "error")
             return 1
 
         # Run calibration
         print()
-        print_status(f"Running calibration with {len(captured_images)} images...", "info")
+        print_status(f"Running calibration with {captured_count} images...", "info")
 
-        for img in captured_images:
-            calibrator.add_image(img)
-
-        result = calibrator.calibrate()
+        result = calibrator.calibrate(min_images=10)
 
         if result is not None:
             # Save results
             output_file = "camera_intrinsics.json"
-            calibrator.save_calibration(output_file)
+            calibrator.save_to_json(output_file)
+            calibrator.print_results()
             print()
             print_status(f"Calibration successful! Saved to {output_file}", "ok")
             print(f"  RMS Error: {result['rms_error']:.4f} pixels")
