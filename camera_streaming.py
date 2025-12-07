@@ -834,26 +834,38 @@ def run_calibration_mode(config: CameraConfig):
         print("=" * 60)
         print()
 
-        # Wait a moment for stream to stabilize before creating window
+        # Create window FIRST before any frame processing to ensure proper GUI initialization
+        # Use WINDOW_NORMAL for consistency with working preview mode
+        window_name = "Calibration - Press SPACE to capture, Q to quit"
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(window_name, 1280, 720)
+
+        # Pump the GUI event loop to ensure window is properly initialized
+        cv2.waitKey(1)
+
+        # Warm up camera stream while showing frames in window
         print_status("Warming up camera stream...", "info")
-        for _ in range(5):
+        frame = None
+        for i in range(10):
             frame = source.get_image()
             if frame is not None:
-                break
-            time.sleep(0.2)
+                # Show warmup frame and pump event loop
+                warmup_display = frame.copy()
+                cv2.putText(warmup_display, f"Warming up... {i+1}/10",
+                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+                # Resize for display if needed
+                if warmup_display.shape[0] > 720:
+                    scale = 720 / warmup_display.shape[0]
+                    warmup_display = cv2.resize(warmup_display, None, fx=scale, fy=scale)
+                cv2.imshow(window_name, warmup_display)
+                cv2.waitKey(1)  # Critical: pump GUI event loop
+            time.sleep(0.1)
 
         if frame is None:
             print_status("Failed to get frames from camera", "error")
+            cv2.destroyAllWindows()
             source.release()
             return 1
-
-        # Create window with GTK-compatible settings
-        # Use WINDOW_AUTOSIZE to avoid some Qt issues
-        window_name = "Calibration - Press SPACE to capture, Q to quit"
-        cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
-
-        # Move window to a visible position
-        cv2.moveWindow(window_name, 100, 100)
 
         print_status("Calibration window opened", "ok")
         print()
