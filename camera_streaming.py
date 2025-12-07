@@ -808,10 +808,6 @@ def run_calibration_mode(config: CameraConfig):
 
     # Use the intrinsic calibration module
     try:
-        board_config = ic.ChArUcoBoardConfig()
-        detector = ic.ChArUcoDetector(board_config)
-        calibrator = ic.IntrinsicCalibrator(board_config)
-
         captured_count = 0
         target_images = 25
 
@@ -870,10 +866,32 @@ def run_calibration_mode(config: CameraConfig):
         print_status("Calibration window opened", "ok")
         print()
 
+        # Create detector and calibrator AFTER window is initialized and first frames displayed
+        # This ensures the GUI is fully set up before any ArUco detection occurs
+        print_status("Initializing ChArUco detector...", "info")
+        board_config = ic.ChArUcoBoardConfig()
+        detector = ic.ChArUcoDetector(board_config)
+        calibrator = ic.IntrinsicCalibrator(board_config)
+
+        # Test detection on the last warm-up frame to ensure detector is working
+        # This helps catch any initialization issues before entering the main loop
+        if frame is not None:
+            try:
+                test_corners, test_ids, test_display = detector.detect(frame)
+                print_status("Detector ready", "ok")
+            except Exception as e:
+                print_status(f"Detector test failed: {e}", "error")
+                cv2.destroyAllWindows()
+                source.release()
+                return 1
+        else:
+            print_status("Detector ready", "ok")
+
         # Track current detection for capture
         current_corners = None
         current_ids = None
         frame_count = 0
+        detection_errors = 0
 
         while captured_count < target_images:
             frame = source.get_image()
@@ -889,7 +907,17 @@ def run_calibration_mode(config: CameraConfig):
             frame_count = 0  # Reset counter on successful frame
 
             # Detect ChArUco board using the unified detect() method
-            charuco_corners, charuco_ids, display = detector.detect(frame)
+            # Wrap in try-except to handle any detection errors gracefully
+            try:
+                charuco_corners, charuco_ids, display = detector.detect(frame)
+            except Exception as e:
+                detection_errors += 1
+                if detection_errors <= 3:
+                    print_status(f"Detection error: {e}", "warn")
+                # Use raw frame as display on error
+                display = frame.copy()
+                charuco_corners = None
+                charuco_ids = None
 
             # Store current detection for potential capture
             current_corners = charuco_corners
