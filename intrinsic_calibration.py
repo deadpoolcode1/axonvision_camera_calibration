@@ -468,11 +468,9 @@ class ChArUcoDetector:
 
     def _init_legacy_detector(self):
         """Initialize legacy ArUco detector for older OpenCV versions."""
-        # Check if ArucoDetector exists (4.5-4.6) or use detectMarkers directly
-        if hasattr(cv2.aruco, 'ArucoDetector'):
-            self.aruco_detector = cv2.aruco.ArucoDetector(self.aruco_dict, self.detector_params)
-        else:
-            self.aruco_detector = None  # Will use cv2.aruco.detectMarkers directly
+        # Force using function-based API (cv2.aruco.detectMarkers) instead of
+        # class-based ArucoDetector which has bugs in some OpenCV 4.6 builds
+        self.aruco_detector = None  # Will use cv2.aruco.detectMarkers directly
         
     def detect(self, image: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], np.ndarray]:
         """
