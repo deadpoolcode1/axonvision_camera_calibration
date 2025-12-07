@@ -773,6 +773,11 @@ def run_calibration_mode(config: CameraConfig):
         print_status("intrinsic_calibration.py not found in current directory", "error")
         return 1
 
+    # Set environment variables to avoid Qt threading issues with OpenCV
+    # This must be done BEFORE any cv2 window operations
+    os.environ['QT_QPA_PLATFORM'] = 'xcb'  # Use X11 backend instead of Wayland
+    os.environ['OPENCV_VIDEOIO_PRIORITY_QT'] = '0'  # Disable Qt priority for video
+
     # Run connectivity test first
     print_status("Running connectivity check...", "info")
     connectivity = CameraConnectivity(config)
@@ -799,7 +804,6 @@ def run_calibration_mode(config: CameraConfig):
 
     print()
     print_status("Starting calibration...", "info")
-    print("Follow the on-screen instructions to capture calibration images.")
     print()
 
     # Use the intrinsic calibration module
@@ -808,26 +812,69 @@ def run_calibration_mode(config: CameraConfig):
         detector = ic.ChArUcoDetector(board_config)
         calibrator = ic.IntrinsicCalibrator(board_config)
 
-        # Run interactive calibration
-        cv2.namedWindow("Calibration", cv2.WINDOW_NORMAL)
-        cv2.resizeWindow("Calibration", 1280, 720)
-
         captured_count = 0
         target_images = 25
 
-        print(f"Capture {target_images} images of the ChArUco board from different angles.")
-        print("Press SPACE to capture, Q to finish early.\n")
+        # Print instructions BEFORE creating windows
+        print("=" * 60)
+        print("  CALIBRATION INSTRUCTIONS")
+        print("=" * 60)
+        print(f"  Capture {target_images} images of the ChArUco board")
+        print("  from different angles and positions.")
+        print()
+        print("  Controls:")
+        print("    SPACE - Capture current frame")
+        print("    Q/ESC - Finish early (need at least 10 images)")
+        print()
+        print("  Tips:")
+        print("    - Hold the board at different angles")
+        print("    - Move the board to cover all areas of the frame")
+        print("    - Ensure good lighting with no reflections")
+        print("    - Wait for green 'Detected' status before capturing")
+        print("=" * 60)
+        print()
+
+        # Wait a moment for stream to stabilize before creating window
+        print_status("Warming up camera stream...", "info")
+        for _ in range(5):
+            frame = source.get_image()
+            if frame is not None:
+                break
+            time.sleep(0.2)
+
+        if frame is None:
+            print_status("Failed to get frames from camera", "error")
+            source.release()
+            return 1
+
+        # Create window with GTK-compatible settings
+        # Use WINDOW_AUTOSIZE to avoid some Qt issues
+        window_name = "Calibration - Press SPACE to capture, Q to quit"
+        cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
+
+        # Move window to a visible position
+        cv2.moveWindow(window_name, 100, 100)
+
+        print_status("Calibration window opened", "ok")
+        print()
 
         # Track current detection for capture
         current_corners = None
         current_ids = None
+        frame_count = 0
 
         while captured_count < target_images:
             frame = source.get_image()
 
             if frame is None:
+                frame_count += 1
+                if frame_count > 50:  # ~5 seconds of no frames
+                    print_status("Lost connection to camera", "error")
+                    break
                 time.sleep(0.1)
                 continue
+
+            frame_count = 0  # Reset counter on successful frame
 
             # Detect ChArUco board using the unified detect() method
             charuco_corners, charuco_ids, display = detector.detect(frame)
@@ -837,24 +884,35 @@ def run_calibration_mode(config: CameraConfig):
             current_ids = charuco_ids
 
             if charuco_corners is not None and len(charuco_corners) > 10:
-                status_text = f"Detected {len(charuco_corners)} corners - Press SPACE to capture"
+                status_text = f"READY - {len(charuco_corners)} corners detected - Press SPACE"
                 color = (0, 255, 0)
             elif charuco_corners is not None:
-                status_text = "Move board closer or adjust angle"
+                status_text = f"Need more corners ({len(charuco_corners)}/10+) - Adjust board"
                 color = (0, 165, 255)
             else:
                 status_text = "No board detected - Show ChArUco board to camera"
                 color = (0, 0, 255)
 
-            # Overlay status
+            # Overlay status on the display frame
+            # Add semi-transparent background for better readability
+            overlay = display.copy()
+            cv2.rectangle(overlay, (5, 5), (700, 75), (0, 0, 0), -1)
+            cv2.addWeighted(overlay, 0.5, display, 0.5, 0, display)
+
             cv2.putText(display, f"Captured: {captured_count}/{target_images}",
                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
             cv2.putText(display, status_text,
                        (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
-            cv2.imshow("Calibration", display)
+            # Resize for display if image is too large
+            display_height = 720
+            if display.shape[0] > display_height:
+                scale = display_height / display.shape[0]
+                display = cv2.resize(display, None, fx=scale, fy=scale)
 
-            key = cv2.waitKey(1) & 0xFF
+            cv2.imshow(window_name, display)
+
+            key = cv2.waitKey(30) & 0xFF  # 30ms delay for ~33fps
 
             if key == ord(' ') and current_corners is not None and len(current_corners) > 10:
                 # Add detection to calibrator
@@ -862,17 +920,25 @@ def run_calibration_mode(config: CameraConfig):
                 if calibrator.add_detection(current_corners, current_ids, image_size):
                     captured_count += 1
                     print_status(f"Captured image {captured_count}/{target_images}", "ok")
-                    time.sleep(0.3)  # Debounce
+                    # Brief visual feedback
+                    feedback = display.copy()
+                    cv2.rectangle(feedback, (0, 0), (feedback.shape[1], feedback.shape[0]), (0, 255, 0), 20)
+                    cv2.imshow(window_name, feedback)
+                    cv2.waitKey(200)  # Show green border briefly
                 else:
                     print_status("Detection rejected - try a different angle", "warn")
 
             elif key in [ord('q'), ord('Q'), 27]:
                 if captured_count >= 10:
+                    print_status("Finishing capture early...", "info")
                     break
                 else:
-                    print_status("Need at least 10 images for calibration", "warn")
+                    print_status(f"Need at least 10 images for calibration (have {captured_count})", "warn")
 
         cv2.destroyAllWindows()
+        # Give OpenCV time to clean up windows
+        cv2.waitKey(1)
+
         source.release()
 
         if captured_count < 10:
@@ -899,9 +965,12 @@ def run_calibration_mode(config: CameraConfig):
             return 1
 
     except Exception as e:
+        import traceback
         source.release()
         cv2.destroyAllWindows()
+        cv2.waitKey(1)
         print_status(f"Calibration error: {str(e)}", "error")
+        traceback.print_exc()
         return 1
 
 
