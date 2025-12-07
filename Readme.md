@@ -464,8 +464,23 @@ PHASE 4:
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-pip install opencv-contrib-python==4.8.1.78 "numpy<2"
-pip install scipy
+pip install -r requirements.txt
+
+# Or manually:
+pip install opencv-contrib-python==4.8.1.78 "numpy<2" scipy requests
+```
+
+### GStreamer Setup (for Network Camera)
+
+For network camera streaming, install GStreamer:
+
+```bash
+# Ubuntu/Debian
+sudo apt install gstreamer1.0-tools gstreamer1.0-plugins-good \
+                 gstreamer1.0-plugins-bad gstreamer1.0-libav
+
+# Verify installation
+gst-launch-1.0 --version
 ```
 
 ### Intrinsic Calibration (once per camera)
@@ -474,8 +489,126 @@ pip install scipy
 # With real images
 python3 intrinsic_calibration.py --images intrinsic_images/ --output camera_intrinsics.json
 
+# With network camera (H265/RTP stream)
+python3 intrinsic_calibration.py --network-camera --output camera_intrinsics.json
+
 # Synthetic demo (no hardware)
 python3 intrinsic_calibration.py --synthetic --output demo_intrinsics.json
+```
+
+---
+
+## Network Camera Streaming
+
+The system supports network cameras with H265/RTP multicast streaming.
+
+### Camera API
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `http://<ip>:5000/` | GET | Camera web interface |
+| `/api/stream/start` | POST | Start streaming (JSON: `{"host": "239.255.0.1", "port": 5010}`) |
+| `/api/stream/stop` | POST | Stop streaming |
+
+### Camera Streaming CLI
+
+```bash
+# Interactive menu
+python3 camera_streaming.py
+
+# Test camera connectivity (ping, API, multicast, GStreamer)
+python3 camera_streaming.py test
+
+# Start camera preview (GStreamer window)
+python3 camera_streaming.py preview
+
+# Start camera preview (OpenCV window - allows capture)
+python3 camera_streaming.py preview --opencv
+
+# Capture single frame
+python3 camera_streaming.py capture -o snapshot.png
+
+# Run calibration with live camera
+python3 camera_streaming.py calibrate
+
+# Start stream only (for external tools)
+python3 camera_streaming.py start
+
+# Stop stream
+python3 camera_streaming.py stop
+```
+
+### Custom Camera IP
+
+```bash
+# Use different camera IP/ports
+python3 camera_streaming.py test --ip 192.168.1.100 --api-port 5000
+
+# Full custom configuration
+python3 camera_streaming.py preview \
+    --ip 192.168.1.100 \
+    --api-port 5000 \
+    --multicast 239.255.0.2 \
+    --stream-port 5020
+```
+
+### GStreamer Pipeline (Manual)
+
+```bash
+# Start stream via API first
+curl -X POST http://10.100.102.222:5000/api/stream/start \
+    -H "Content-Type: application/json" \
+    -d '{"host": "239.255.0.1", "port": 5010}'
+
+# View with GStreamer
+gst-launch-1.0 udpsrc address=239.255.0.1 port=5010 \
+    caps="application/x-rtp,media=video,encoding-name=H265,payload=96" ! \
+    rtph265depay ! h265parse ! avdec_h265 ! videoconvert ! autovideosink
+```
+
+### Connectivity Diagnostics
+
+The `test` command runs comprehensive diagnostics:
+
+```
+============================================================
+  Camera Connectivity Diagnostics
+============================================================
+
+[*] Pinging 10.100.102.222...
+[OK] Camera reachable at 10.100.102.222
+      Latency: 1.2ms
+
+[*] Checking port 5000...
+[OK] Port 5000 is open
+
+[*] Testing API at http://10.100.102.222:5000...
+[OK] Camera API is responding
+
+[*] Checking multicast support...
+[OK] Multicast supported for 239.255.0.1
+
+[*] Checking GStreamer installation...
+[OK] GStreamer ready: gst-launch-1.0 version 1.20.3
+
+============================================================
+  Diagnostics Summary
+============================================================
+  Tests Passed: 5/5
+[OK] All tests passed! Camera is ready.
+```
+
+### Calibration with Network Camera
+
+```bash
+# Step 1: Test connectivity first
+python3 camera_streaming.py test
+
+# Step 2: Run intrinsic calibration
+python3 intrinsic_calibration.py --network-camera -o camera_intrinsics.json
+
+# Or use the integrated calibration mode
+python3 camera_streaming.py calibrate
 ```
 
 ### Extrinsic Calibration (once per installation)
