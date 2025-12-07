@@ -44,6 +44,11 @@ except ImportError:
     print("ERROR: 'numpy' module not found. Install with: pip install 'numpy<2'")
     sys.exit(1)
 
+# Set environment variables to avoid Qt threading issues with OpenCV
+# CRITICAL: This must be done BEFORE cv2 is imported because Qt initializes at import time
+os.environ['QT_QPA_PLATFORM'] = 'xcb'  # Use X11 backend instead of Wayland
+os.environ['OPENCV_VIDEOIO_PRIORITY_QT'] = '0'  # Disable Qt priority for video
+
 try:
     import cv2
 except ImportError:
@@ -772,11 +777,6 @@ def run_calibration_mode(config: CameraConfig):
     except ImportError:
         print_status("intrinsic_calibration.py not found in current directory", "error")
         return 1
-
-    # Set environment variables to avoid Qt threading issues with OpenCV
-    # This must be done BEFORE any cv2 window operations
-    os.environ['QT_QPA_PLATFORM'] = 'xcb'  # Use X11 backend instead of Wayland
-    os.environ['OPENCV_VIDEOIO_PRIORITY_QT'] = '0'  # Disable Qt priority for video
 
     # Run connectivity test first
     print_status("Running connectivity check...", "info")
