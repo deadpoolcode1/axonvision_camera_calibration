@@ -1,0 +1,14 @@
+# AxonVision Camera Calibration - Dependencies
+# Install with: pip install -r requirements.txt
+
+# Core dependencies
+opencv-contrib-python==4.8.1.78
+numpy<2
+scipy
+
+# Network camera streaming support
+requests
+
+# Optional: For better performance with GStreamer OpenCV backend
+# Uncomment if using GStreamer with OpenCV:
+# opencv-python-headless  # Use this instead of opencv-contrib-python if no GUI needed

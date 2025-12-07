@@ -296,21 +296,124 @@ class SyntheticImageSource(ImageSource):
 
 class RealCameraSource(ImageSource):
     """Captures from real camera via OpenCV VideoCapture"""
-    
+
     def __init__(self, camera_index: int = 0, width: int = 1920, height: int = 1080):
         self.cap = cv2.VideoCapture(camera_index)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-        
+
         if not self.cap.isOpened():
             raise RuntimeError(f"Failed to open camera {camera_index}")
-    
+
     def get_image(self) -> Optional[np.ndarray]:
         ret, frame = self.cap.read()
         return frame if ret else None
-    
+
     def release(self):
         self.cap.release()
+
+
+class NetworkCameraSource(ImageSource):
+    """Captures from network camera via H265/RTP multicast stream using GStreamer"""
+
+    def __init__(self, ip: str = "10.100.102.222", api_port: int = 5000,
+                 multicast_host: str = "239.255.0.1", stream_port: int = 5010,
+                 width: int = 1920, height: int = 1080, timeout: float = 5.0):
+        self.ip = ip
+        self.api_port = api_port
+        self.multicast_host = multicast_host
+        self.stream_port = stream_port
+        self.width = width
+        self.height = height
+        self.timeout = timeout
+        self.cap: Optional[cv2.VideoCapture] = None
+        self._stream_started = False
+
+        # Try to import requests for API calls
+        try:
+            import requests
+            self.requests = requests
+        except ImportError:
+            raise RuntimeError("'requests' module required. Install with: pip install requests")
+
+    @property
+    def base_url(self) -> str:
+        return f"http://{self.ip}:{self.api_port}"
+
+    def _start_stream(self) -> bool:
+        """Start camera streaming via API"""
+        try:
+            payload = {
+                "host": self.multicast_host,
+                "port": self.stream_port
+            }
+            response = self.requests.post(
+                f"{self.base_url}/api/stream/start",
+                json=payload,
+                headers={"Content-Type": "application/json"},
+                timeout=self.timeout
+            )
+            self._stream_started = response.status_code == 200
+            return self._stream_started
+        except Exception as e:
+            print(f"Failed to start stream: {e}")
+            return False
+
+    def _stop_stream(self):
+        """Stop camera streaming via API"""
+        try:
+            self.requests.post(
+                f"{self.base_url}/api/stream/stop",
+                headers={"Content-Type": "application/json"},
+                timeout=self.timeout
+            )
+        except Exception:
+            pass
+        self._stream_started = False
+
+    def connect(self) -> bool:
+        """Connect to the network camera"""
+        import time
+
+        # Start the camera stream via API
+        print(f"Connecting to camera at {self.ip}...")
+        if not self._start_stream():
+            print("Failed to start camera stream via API")
+            return False
+
+        print("Stream started, connecting via GStreamer...")
+        time.sleep(1.0)  # Give stream time to start
+
+        # GStreamer pipeline for OpenCV
+        pipeline = (
+            f"udpsrc address={self.multicast_host} port={self.stream_port} "
+            f'caps="application/x-rtp,media=video,encoding-name=H265,payload=96" ! '
+            f"rtph265depay ! h265parse ! avdec_h265 ! videoconvert ! "
+            f"video/x-raw,format=BGR ! appsink drop=1"
+        )
+
+        self.cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+
+        if not self.cap.isOpened():
+            print("Failed to open GStreamer pipeline")
+            self._stop_stream()
+            return False
+
+        print("Connected to network camera")
+        return True
+
+    def get_image(self) -> Optional[np.ndarray]:
+        if self.cap is None:
+            return None
+        ret, frame = self.cap.read()
+        return frame if ret else None
+
+    def release(self):
+        if self.cap:
+            self.cap.release()
+            self.cap = None
+        if self._stream_started:
+            self._stop_stream()
 
 
 class ChArUcoDetector:
@@ -741,6 +844,33 @@ def main():
         help="Camera device index for real camera mode"
     )
     parser.add_argument(
+        "--network-camera",
+        action="store_true",
+        help="Use network camera (H265/RTP stream) instead of local camera"
+    )
+    parser.add_argument(
+        "--camera-ip",
+        default="10.100.102.222",
+        help="Network camera IP address (default: 10.100.102.222)"
+    )
+    parser.add_argument(
+        "--api-port",
+        type=int,
+        default=5000,
+        help="Network camera API port (default: 5000)"
+    )
+    parser.add_argument(
+        "--multicast",
+        default="239.255.0.1",
+        help="Multicast address for stream (default: 239.255.0.1)"
+    )
+    parser.add_argument(
+        "--stream-port",
+        type=int,
+        default=5010,
+        help="Stream port (default: 5010)"
+    )
+    parser.add_argument(
         "--save-images",
         action="store_true",
         help="Save captured calibration images"
@@ -786,14 +916,34 @@ def main():
         print("Mode: SYNTHETIC (fake camera images)")
         image_source = SyntheticImageSource(board_config, camera_config, args.num_images + 5)
         ground_truth = camera_config
+    elif args.network_camera:
+        print("Mode: NETWORK CAMERA (H265/RTP stream)")
+        print(f"  Camera IP: {args.camera_ip}:{args.api_port}")
+        print(f"  Stream: {args.multicast}:{args.stream_port}")
+        try:
+            image_source = NetworkCameraSource(
+                ip=args.camera_ip,
+                api_port=args.api_port,
+                multicast_host=args.multicast,
+                stream_port=args.stream_port
+            )
+            if not image_source.connect():
+                print("Error: Failed to connect to network camera")
+                print("Run 'python3 camera_streaming.py test' to diagnose connectivity")
+                return 1
+            ground_truth = None
+        except RuntimeError as e:
+            print(f"Error: {e}")
+            return 1
     else:
-        print("Mode: REAL CAMERA")
+        print("Mode: REAL CAMERA (local device)")
         try:
             image_source = RealCameraSource(args.camera_index)
             ground_truth = None
         except RuntimeError as e:
             print(f"Error: {e}")
             print("Use --synthetic flag for testing without a real camera")
+            print("Use --network-camera flag for network camera streaming")
             return 1
     
     try:
