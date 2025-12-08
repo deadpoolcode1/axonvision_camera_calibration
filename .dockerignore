@@ -1,0 +1,38 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+.venv/
+*.egg-info/
+.eggs/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Output files (will be mounted as volume)
+output/
+*.json
+!requirements.txt
+
+# Calibration images (will be mounted as volume)
+calibration_images/
+intrinsic_images/
+
+# Documentation (not needed in container)
+*.md
+!Readme.md
+
+# OS files
+.DS_Store
+Thumbs.db

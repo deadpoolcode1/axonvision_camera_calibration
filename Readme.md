@@ -650,3 +650,124 @@ cat demo_extrinsics.json
 | Camera prior | Simulated (~10cm, ~2° error) | Measured with tape/inclinometer |
 | INS | Simulated | Real INS data |
 | Images | Synthetic ChArUco rendering | Real camera images |
+
+---
+
+## Docker Setup
+
+The AxonVision CLI can be deployed as a Docker container for consistent and portable execution.
+
+### Prerequisites
+
+- Docker installed and running
+- Access to the camera network (for live camera features)
+
+### Build the Docker Image
+
+```bash
+docker build -t ghcr.io/deadpoolcode1/axonvision-cli:latest -f src/axonvision-cli/Dockerfile .
+```
+
+### Push to Registry (Developer)
+
+```bash
+docker push ghcr.io/deadpoolcode1/axonvision-cli:latest
+```
+
+### Pull from Registry
+
+```bash
+docker pull ghcr.io/deadpoolcode1/axonvision-cli:latest
+```
+
+### Run the Container
+
+```bash
+# Run with default settings (shows help)
+docker run --rm ghcr.io/deadpoolcode1/axonvision-cli:latest
+
+# Run connectivity test
+docker run --rm --network host \
+    ghcr.io/deadpoolcode1/axonvision-cli:latest \
+    python3 camera_streaming.py test
+
+# Run with interactive menu
+docker run -it --rm --network host \
+    ghcr.io/deadpoolcode1/axonvision-cli:latest \
+    python3 camera_streaming.py menu
+
+# Run intrinsic calibration (synthetic demo)
+docker run --rm -v $(pwd)/output:/app/output \
+    ghcr.io/deadpoolcode1/axonvision-cli:latest \
+    python3 intrinsic_calibration.py --synthetic -o output/demo_intrinsics.json
+
+# Run extrinsic calibration demo
+docker run --rm -v $(pwd)/output:/app/output \
+    ghcr.io/deadpoolcode1/axonvision-cli:latest \
+    python3 extrinsic_calibration.py --demo -n 7 -o output/demo_extrinsics.json
+```
+
+### Run with GUI Support (Linux)
+
+For features requiring display (camera preview, live calibration):
+
+```bash
+# Allow X11 forwarding
+xhost +local:docker
+
+# Run with display support
+docker run -it --rm \
+    --network host \
+    -e DISPLAY=$DISPLAY \
+    -v /tmp/.X11-unix:/tmp/.X11-unix \
+    -v $(pwd)/output:/app/output \
+    ghcr.io/deadpoolcode1/axonvision-cli:latest \
+    python3 camera_streaming.py preview --opencv
+
+# Revoke X11 access when done
+xhost -local:docker
+```
+
+### Docker Compose Example
+
+Create a `docker-compose.yml` for easier management:
+
+```yaml
+version: '3.8'
+
+services:
+  axonvision-cli:
+    image: ghcr.io/deadpoolcode1/axonvision-cli:latest
+    build:
+      context: .
+      dockerfile: src/axonvision-cli/Dockerfile
+    network_mode: host
+    volumes:
+      - ./output:/app/output
+      - ./calibration_images:/app/calibration_images
+    environment:
+      - DISPLAY=${DISPLAY}
+    stdin_open: true
+    tty: true
+```
+
+Run with:
+
+```bash
+docker-compose run axonvision-cli python3 camera_streaming.py test
+```
+
+### Common Docker Commands
+
+| Command | Description |
+|---------|-------------|
+| `docker run --rm ghcr.io/deadpoolcode1/axonvision-cli:latest python3 intrinsic_calibration.py --help` | Show intrinsic calibration help |
+| `docker run --rm ghcr.io/deadpoolcode1/axonvision-cli:latest python3 extrinsic_calibration.py --help` | Show extrinsic calibration help |
+| `docker run --rm ghcr.io/deadpoolcode1/axonvision-cli:latest python3 camera_streaming.py --help` | Show camera streaming help |
+
+### Notes
+
+- Use `--network host` for camera connectivity (multicast streaming)
+- Use `-v $(pwd)/output:/app/output` to persist calibration results
+- GUI features require X11 forwarding on Linux
+- For headless operation, use `--synthetic` or `--demo` flags
