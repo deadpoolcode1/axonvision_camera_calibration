@@ -1,14 +1,15 @@
 # AxonVision Camera Calibration - Dependencies
+# Python 3.8+ required
 # Install with: pip install -r requirements.txt
 
-# Core dependencies
+# Computer vision (includes ArUco/ChArUco detection)
 opencv-contrib-python==4.8.1.78
-numpy<2
-scipy
 
-# Network camera streaming support
-requests
+# Numerical computing (numpy 2.0 has breaking changes)
+numpy>=1.21,<2
 
-# Optional: For better performance with GStreamer OpenCV backend
-# Uncomment if using GStreamer with OpenCV:
-# opencv-python-headless  # Use this instead of opencv-contrib-python if no GUI needed
+# Scientific computing (optimization, spatial transforms)
+scipy>=1.7.0
+
+# HTTP client for network camera API
+requests>=2.25.0
