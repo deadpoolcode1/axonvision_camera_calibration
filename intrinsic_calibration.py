@@ -505,9 +505,10 @@ class ChArUcoDetector:
                 if self.aruco_detector is not None:
                     marker_corners, marker_ids, rejected = self.aruco_detector.detectMarkers(gray)
                 else:
-                    # Very old OpenCV (< 4.5) - use function directly
+                    # Use function-based API without explicit parameters
+                    # (passing DetectorParameters crashes on OpenCV 4.6 with certain builds)
                     marker_corners, marker_ids, rejected = cv2.aruco.detectMarkers(
-                        gray, self.aruco_dict, parameters=self.detector_params
+                        gray, self.aruco_dict
                     )
 
                 if marker_ids is None or len(marker_ids) == 0:
