@@ -35,6 +35,7 @@ try:
 except ImportError:
     HAS_REPORTLAB = False
     inch = 72  # Fallback: 1 inch = 72 points (standard PDF unit)
+    RLImage = None  # Fallback for type annotation
 
 
 # Supported ArUco dictionaries with their names
