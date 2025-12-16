@@ -26,8 +26,8 @@ from typing import Optional, List, Tuple
 @dataclass
 class ChArUcoBoardConfig:
     """ChArUco board configuration"""
-    squares_x: int = 10
-    squares_y: int = 10
+    squares_x: int = 8
+    squares_y: int = 8
     square_length: float = 0.11  # meters
     marker_length: float = 0.085  # meters (typically ~77% of square)
     dictionary_id: int = cv2.aruco.DICT_6X6_250

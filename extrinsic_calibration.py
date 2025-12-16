@@ -53,8 +53,8 @@ import warnings
 @dataclass
 class ChArUcoBoardConfig:
     """ChArUco board configuration."""
-    squares_x: int = 10
-    squares_y: int = 10
+    squares_x: int = 8
+    squares_y: int = 8
     square_size: float = 0.11      # 11cm squares
     marker_size: float = 0.085     # 8.5cm markers
     dictionary_id: int = cv2.aruco.DICT_6X6_250
