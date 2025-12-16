@@ -84,8 +84,16 @@ class ChArUcoBoardConfig:
     
     def create_board(self):
         aruco_dict = cv2.aruco.getPredefinedDictionary(self.dictionary_id)
+
+        # Check OpenCV version for API compatibility
         # OpenCV 4.7+ uses CharucoBoard constructor, older versions use CharucoBoard_create
-        if hasattr(cv2.aruco, 'CharucoBoard'):
+        try:
+            cv_version = tuple(map(int, cv2.__version__.split('.')[:2]))
+        except (ValueError, AttributeError):
+            cv_version = (4, 0)  # Default to older API
+
+        if cv_version >= (4, 7):
+            # OpenCV 4.7+ API
             board = cv2.aruco.CharucoBoard(
                 (self.squares_x, self.squares_y),
                 self.square_size,
@@ -93,6 +101,7 @@ class ChArUcoBoardConfig:
                 aruco_dict
             )
         else:
+            # Older OpenCV API (4.6 and below)
             board = cv2.aruco.CharucoBoard_create(
                 self.squares_x,
                 self.squares_y,
@@ -1731,14 +1740,14 @@ class ExtrinsicCalibrationMenu:
 
         # CRITICAL: Warm up camera stream while showing frames in window
         # This ensures GUI backend is fully initialized before ArUco detection
-        print_status("Warming up camera stream...", "info")
+        print_status("Warming up camera stream (not capturing yet)...", "info")
         frame = None
         for i in range(10):
             frame = self.camera_source.get_image()
             if frame is not None:
                 # Show warmup frame and pump event loop
                 warmup_display = frame.copy()
-                cv2.putText(warmup_display, f"Warming up... {i+1}/10",
+                cv2.putText(warmup_display, f"Initializing camera... {i+1}/10 (not capturing)",
                            (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
                 # Resize for display if needed
                 if warmup_display.shape[0] > 720:
@@ -1759,7 +1768,20 @@ class ExtrinsicCalibrationMenu:
         # This prevents segfaults that occur when ArUco is initialized before GUI
         print_status("Initializing ChArUco detector...", "info")
         board, aruco_dict = self.board_config.create_board()
-        print_status("Detector ready", "ok")
+
+        # Test detection on the last warmup frame to catch any initialization issues
+        # This helps prevent segfaults in the main loop
+        if frame is not None:
+            try:
+                gray_test = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
+                test_corners, test_ids, _ = cv2.aruco.detectMarkers(gray_test, aruco_dict)
+                print_status("Detector ready", "ok")
+            except Exception as e:
+                print_status(f"Detector test failed: {e}", "error")
+                cv2.destroyAllWindows()
+                return None
+        else:
+            print_status("Detector ready", "ok")
 
         # Get camera matrix and distortion for pose estimation preview
         K = np.array(self.intrinsics["camera_matrix"])
@@ -1768,6 +1790,7 @@ class ExtrinsicCalibrationMenu:
         captured_image = None
         frame_count = 0
         no_frame_count = 0
+        detection_errors = 0
 
         while True:
             frame = self.camera_source.get_image()
@@ -1786,28 +1809,35 @@ class ExtrinsicCalibrationMenu:
             # Create display copy
             display = frame.copy()
 
-            # Detect ArUco markers using legacy function-based API for OpenCV compatibility
-            corners, ids, rejected = cv2.aruco.detectMarkers(frame, aruco_dict)
+            # Convert to grayscale for ArUco detection (matches intrinsic calibration approach)
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame.copy()
 
             charuco_corners = None
             charuco_ids = None
             num_corners = 0
 
-            if ids is not None and len(ids) > 0:
-                # Draw detected markers
-                cv2.aruco.drawDetectedMarkers(display, corners, ids)
+            # Detect ArUco markers using legacy function-based API for OpenCV compatibility
+            # Wrap in try-except to handle any detection errors gracefully
+            try:
+                corners, ids, rejected = cv2.aruco.detectMarkers(gray, aruco_dict)
 
-                # Interpolate ChArUco corners
-                try:
+                if ids is not None and len(ids) > 0:
+                    # Draw detected markers
+                    cv2.aruco.drawDetectedMarkers(display, corners, ids)
+
+                    # Interpolate ChArUco corners
                     retval, charuco_corners, charuco_ids = cv2.aruco.interpolateCornersCharuco(
-                        corners, ids, frame, board
+                        corners, ids, gray, board
                     )
                     if retval > 0 and charuco_corners is not None:
                         num_corners = len(charuco_corners)
                         # Draw ChArUco corners
                         cv2.aruco.drawDetectedCornersCharuco(display, charuco_corners, charuco_ids)
-                except Exception:
-                    pass
+            except Exception as e:
+                detection_errors += 1
+                if detection_errors <= 3:
+                    print_status(f"Detection error: {e}", "warn")
+                # Continue with no detection on error
 
             # Determine status
             if num_corners >= 6:
