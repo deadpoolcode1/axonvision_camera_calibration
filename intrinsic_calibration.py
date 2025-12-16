@@ -29,7 +29,7 @@ class ChArUcoBoardConfig:
     squares_x: int = 8
     squares_y: int = 8
     square_length: float = 0.11  # meters
-    marker_length: float = 0.085  # meters (typically ~77% of square)
+    marker_length: float = 0.075  # meters (75mm marker size)
     dictionary_id: int = cv2.aruco.DICT_6X6_250
     
     def create_board(self):
