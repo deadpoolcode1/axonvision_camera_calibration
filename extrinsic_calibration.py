@@ -1659,10 +1659,9 @@ class ExtrinsicCalibrationMenu:
             print_status("Camera source not available", "error")
             return None
 
-        # Create detector for preview
+        # Create board and dictionary for detection
+        # Use function-based API (cv2.aruco.detectMarkers) for compatibility with older OpenCV
         board, aruco_dict = self.board_config.create_board()
-        detector_params = cv2.aruco.DetectorParameters()
-        aruco_detector = cv2.aruco.ArucoDetector(aruco_dict, detector_params)
 
         # Get camera matrix and distortion for pose estimation preview
         K = np.array(self.intrinsics["camera_matrix"])
@@ -1713,8 +1712,8 @@ class ExtrinsicCalibrationMenu:
             # Create display copy
             display = frame.copy()
 
-            # Detect ArUco markers
-            corners, ids, rejected = aruco_detector.detectMarkers(frame)
+            # Detect ArUco markers using legacy function-based API for OpenCV compatibility
+            corners, ids, rejected = cv2.aruco.detectMarkers(frame, aruco_dict)
 
             charuco_corners = None
             charuco_ids = None
