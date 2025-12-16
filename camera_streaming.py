@@ -44,10 +44,12 @@ except ImportError:
     print("ERROR: 'numpy' module not found. Install with: pip install 'numpy<2'")
     sys.exit(1)
 
-# Set environment variables to avoid Qt threading issues with OpenCV
-# CRITICAL: This must be done BEFORE cv2 is imported because Qt initializes at import time
+# Set environment variables to avoid Qt/GTK threading issues with OpenCV
+# CRITICAL: This must be done BEFORE cv2 is imported because Qt/GTK initialize at import time
 os.environ['QT_QPA_PLATFORM'] = 'xcb'  # Use X11 backend instead of Wayland
 os.environ['OPENCV_VIDEOIO_PRIORITY_QT'] = '0'  # Disable Qt priority for video
+os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = ''  # Prevent Qt plugin conflicts
+os.environ['GDK_BACKEND'] = 'x11'  # Force GTK to use X11
 
 try:
     import cv2
@@ -621,14 +623,38 @@ class CameraPreviewApp:
         print("  [Q/ESC] - Quit")
         print()
 
+        # Check if DISPLAY environment variable is set (required for GUI on Linux)
+        display = os.environ.get('DISPLAY')
+        if not display:
+            print_status("No DISPLAY environment variable set", "error")
+            print("  Camera preview requires a graphical display.")
+            return
+
         source = NetworkCameraSource(self.config)
 
         if not source.connect():
             print_status("Failed to connect to camera", "error")
             return
 
-        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(window_name, 1280, 720)
+        # Clean up any existing windows and initialize GUI backend
+        cv2.destroyAllWindows()
+        cv2.waitKey(1)  # Pump event loop
+
+        # Initialize the GUI thread on Linux (helps prevent segfaults with some OpenCV builds)
+        try:
+            if hasattr(cv2, 'startWindowThread'):
+                cv2.startWindowThread()
+        except Exception:
+            pass
+
+        try:
+            cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+            cv2.resizeWindow(window_name, 1280, 720)
+            cv2.waitKey(1)  # Pump event loop to ensure window is created
+        except Exception as e:
+            print_status(f"Failed to create preview window: {e}", "error")
+            source.release()
+            return
 
         self.running = True
         frame_count = 0

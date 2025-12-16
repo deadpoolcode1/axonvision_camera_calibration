@@ -8,10 +8,12 @@ Supports both real camera input and synthetic image generation for testing.
 
 import os
 
-# Set environment variables to avoid Qt threading issues with OpenCV
-# CRITICAL: This must be done BEFORE cv2 is imported because Qt initializes at import time
-os.environ.setdefault('QT_QPA_PLATFORM', 'xcb')  # Use X11 backend instead of Wayland
-os.environ.setdefault('OPENCV_VIDEOIO_PRIORITY_QT', '0')  # Disable Qt priority for video
+# Set environment variables to avoid Qt/GTK threading issues with OpenCV
+# CRITICAL: This must be done BEFORE cv2 is imported because Qt/GTK initialize at import time
+os.environ['QT_QPA_PLATFORM'] = 'xcb'  # Use X11 backend instead of Wayland
+os.environ['OPENCV_VIDEOIO_PRIORITY_QT'] = '0'  # Disable Qt priority for video
+os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = ''  # Prevent Qt plugin conflicts
+os.environ['GDK_BACKEND'] = 'x11'  # Force GTK to use X11
 
 import numpy as np
 import cv2

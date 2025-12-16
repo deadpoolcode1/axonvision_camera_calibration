@@ -34,10 +34,13 @@ RESIDUALS:
 
 import os
 
-# Set environment variables to avoid Qt threading issues with OpenCV
-# CRITICAL: This must be done BEFORE cv2 is imported
-os.environ.setdefault('QT_QPA_PLATFORM', 'xcb')
-os.environ.setdefault('OPENCV_VIDEOIO_PRIORITY_QT', '0')
+# Set environment variables to avoid Qt/GTK threading issues with OpenCV
+# CRITICAL: This must be done BEFORE cv2 is imported because Qt/GTK initialize at import time
+# Use direct assignment to ensure these are set even if already defined in environment
+os.environ['QT_QPA_PLATFORM'] = 'xcb'  # Use X11 backend instead of Wayland
+os.environ['OPENCV_VIDEOIO_PRIORITY_QT'] = '0'  # Disable Qt priority for video
+os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = ''  # Prevent Qt plugin conflicts
+os.environ['GDK_BACKEND'] = 'x11'  # Force GTK to use X11
 
 import cv2
 import numpy as np
@@ -1691,11 +1694,37 @@ class ExtrinsicCalibrationMenu:
         print()
 
         window_name = "Extrinsic Calibration - Press SPACE to capture"
-        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(window_name, 1280, 720)
 
-        # Pump the GUI event loop
-        cv2.waitKey(1)
+        # Check if DISPLAY environment variable is set (required for GUI on Linux)
+        display = os.environ.get('DISPLAY')
+        if not display:
+            print_status("No DISPLAY environment variable set", "error")
+            print("  Camera preview requires a graphical display.")
+            print("  Either run on a system with a display, or use 'Load from file' option.")
+            return None
+
+        # Clean up any existing windows and initialize GUI backend
+        cv2.destroyAllWindows()
+        cv2.waitKey(1)  # Pump event loop
+
+        # Initialize the GUI thread on Linux (helps prevent segfaults with some OpenCV builds)
+        try:
+            # startWindowThread is only available on some Linux builds
+            if hasattr(cv2, 'startWindowThread'):
+                cv2.startWindowThread()
+        except Exception:
+            pass  # Not critical if it fails
+
+        # Try to create window with error handling
+        try:
+            cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+            cv2.resizeWindow(window_name, 1280, 720)
+            cv2.waitKey(1)  # Pump event loop to ensure window is created
+        except Exception as e:
+            print_status(f"Failed to create preview window: {e}", "error")
+            print("  This may be caused by display/GUI issues.")
+            print("  Try running with X11 forwarding or on a local display.")
+            return None
 
         captured_image = None
         frame_count = 0
