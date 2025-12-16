@@ -34,6 +34,7 @@ try:
     HAS_REPORTLAB = True
 except ImportError:
     HAS_REPORTLAB = False
+    inch = 72  # Fallback: 1 inch = 72 points (standard PDF unit)
 
 
 # Supported ArUco dictionaries with their names
