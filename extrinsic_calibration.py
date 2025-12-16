@@ -317,35 +317,60 @@ class ChArUcoDetector:
         self._use_new_api = hasattr(cv2.aruco, 'CharucoDetector')
 
         if self._use_new_api:
-            # OpenCV 4.7+ new API
-            self.detector = cv2.aruco.CharucoDetector(self.board)
+            # OpenCV 4.7+ new API - wrap in try/except as some builds crash
+            try:
+                self.detector = cv2.aruco.CharucoDetector(self.board)
+            except Exception as e:
+                print(f"Warning: CharucoDetector init failed ({e}), using legacy API")
+                self._use_new_api = False
+                self._init_legacy_detector()
         else:
-            # OpenCV < 4.7 legacy API
-            self.detector_params = cv2.aruco.DetectorParameters_create() if hasattr(cv2.aruco, 'DetectorParameters_create') else cv2.aruco.DetectorParameters()
+            self._init_legacy_detector()
 
+        # Initialize corners_3d (needed for both API versions)
         if hasattr(self.board, 'getChessboardCorners'):
             self.corners_3d = self.board.getChessboardCorners()
         else:
             self.corners_3d = self.board.chessboardCorners
 
+    def _init_legacy_detector(self):
+        """Initialize legacy ArUco detector for older OpenCV versions."""
+        # Create detector parameters - handle different OpenCV versions
+        if hasattr(cv2.aruco, 'DetectorParameters'):
+            self.detector_params = cv2.aruco.DetectorParameters()
+        elif hasattr(cv2.aruco, 'DetectorParameters_create'):
+            self.detector_params = cv2.aruco.DetectorParameters_create()
+        else:
+            self.detector_params = None
+
     def detect(self, image: np.ndarray) -> Optional[Tuple[np.ndarray, np.ndarray]]:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
 
-        if self._use_new_api:
-            # OpenCV 4.7+ new API
-            corners, ids, _, _ = self.detector.detectBoard(gray)
-        else:
-            # OpenCV < 4.7 legacy API
-            # First detect ArUco markers
-            marker_corners, marker_ids, _ = cv2.aruco.detectMarkers(
-                gray, self.aruco_dict, parameters=self.detector_params
-            )
-            if marker_ids is None or len(marker_ids) < 4:
-                return None
-            # Then interpolate CharUco corners
-            _, corners, ids = cv2.aruco.interpolateCornersCharuco(
-                marker_corners, marker_ids, gray, self.board
-            )
+        try:
+            if self._use_new_api:
+                # OpenCV 4.7+ new API
+                corners, ids, _, _ = self.detector.detectBoard(gray)
+            else:
+                # OpenCV < 4.7 legacy API
+                # First detect ArUco markers
+                # Note: passing DetectorParameters can crash on some OpenCV 4.6 builds
+                if self.detector_params is not None:
+                    marker_corners, marker_ids, _ = cv2.aruco.detectMarkers(
+                        gray, self.aruco_dict, parameters=self.detector_params
+                    )
+                else:
+                    marker_corners, marker_ids, _ = cv2.aruco.detectMarkers(
+                        gray, self.aruco_dict
+                    )
+                if marker_ids is None or len(marker_ids) < 4:
+                    return None
+                # Then interpolate CharUco corners
+                _, corners, ids = cv2.aruco.interpolateCornersCharuco(
+                    marker_corners, marker_ids, gray, self.board
+                )
+        except Exception as e:
+            print(f"Warning: ChArUco detection failed: {e}")
+            return None
 
         if corners is None or len(corners) < 6:
             return None
