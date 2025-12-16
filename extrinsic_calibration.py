@@ -56,7 +56,7 @@ class ChArUcoBoardConfig:
     squares_x: int = 8
     squares_y: int = 8
     square_size: float = 0.11      # 11cm squares
-    marker_size: float = 0.085     # 8.5cm markers
+    marker_size: float = 0.075     # 7.5cm markers (75mm)
     dictionary_id: int = cv2.aruco.DICT_6X6_250
     rtk_antenna_offset_board: np.ndarray = field(default_factory=lambda: np.array([0.0, 0.0, 0.0]))
     
