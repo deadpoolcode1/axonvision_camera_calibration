@@ -1091,21 +1091,893 @@ def run_demo(num_measurements: int = 5, intrinsics_path: str = None,
     return result
 
 
+# =============================================================================
+# INTERACTIVE MENU SYSTEM
+# =============================================================================
+
+def print_header(title: str):
+    """Print a formatted header."""
+    print("\n" + "=" * 70)
+    print(f"  {title}")
+    print("=" * 70)
+
+
+def print_subheader(title: str):
+    """Print a formatted subheader."""
+    print("\n" + "-" * 50)
+    print(f"  {title}")
+    print("-" * 50)
+
+
+def print_status(message: str, status: str = "info"):
+    """Print a status message with color indicator."""
+    indicators = {"ok": "[✓]", "error": "[✗]", "warn": "[!]", "info": "[i]"}
+    print(f"  {indicators.get(status, '[·]')} {message}")
+
+
+def input_float(prompt: str, default: float = None) -> Optional[float]:
+    """Get float input from user with optional default."""
+    default_str = f" [{default}]" if default is not None else ""
+    try:
+        value = input(f"  {prompt}{default_str}: ").strip()
+        if not value and default is not None:
+            return default
+        return float(value)
+    except (ValueError, EOFError, KeyboardInterrupt):
+        return default
+
+
+def input_int(prompt: str, default: int = None) -> Optional[int]:
+    """Get integer input from user with optional default."""
+    default_str = f" [{default}]" if default is not None else ""
+    try:
+        value = input(f"  {prompt}{default_str}: ").strip()
+        if not value and default is not None:
+            return default
+        return int(value)
+    except (ValueError, EOFError, KeyboardInterrupt):
+        return default
+
+
+def input_string(prompt: str, default: str = None) -> Optional[str]:
+    """Get string input from user with optional default."""
+    default_str = f" [{default}]" if default is not None else ""
+    try:
+        value = input(f"  {prompt}{default_str}: ").strip()
+        if not value and default is not None:
+            return default
+        return value if value else default
+    except (EOFError, KeyboardInterrupt):
+        return default
+
+
+def input_vector3(prompt: str, defaults: List[float] = None) -> Optional[np.ndarray]:
+    """Get 3D vector input from user."""
+    print(f"\n  {prompt}")
+    if defaults is None:
+        defaults = [0.0, 0.0, 0.0]
+
+    x = input_float("X (meters)", defaults[0])
+    y = input_float("Y (meters)", defaults[1])
+    z = input_float("Z (meters)", defaults[2])
+
+    if x is None or y is None or z is None:
+        return None
+    return np.array([x, y, z])
+
+
+def input_yes_no(prompt: str, default: bool = True) -> bool:
+    """Get yes/no input from user."""
+    default_str = "Y/n" if default else "y/N"
+    try:
+        value = input(f"  {prompt} [{default_str}]: ").strip().lower()
+        if not value:
+            return default
+        return value in ('y', 'yes', '1', 'true')
+    except (EOFError, KeyboardInterrupt):
+        return default
+
+
+class ExtrinsicCalibrationMenu:
+    """Interactive menu for extrinsic calibration."""
+
+    DEFAULT_INTRINSICS_PATH = "camera_intrinsics.json"
+
+    def __init__(self):
+        self.board_config = ChArUcoBoardConfig()
+        self.calibration_config = CalibrationConfig()
+        self.imu_config = IMUConfig()
+        self.intrinsics = None
+        self.intrinsics_path = None
+        self.camera_prior = None
+        self.calibrator = None
+        self.measurements_data = []  # Store raw measurement data for display
+        self.camera_id = "camera_front"
+        self.output_path = "camera_extrinsics.json"
+
+    def run(self):
+        """Run the interactive menu."""
+        print_header("Extrinsic Camera Calibration")
+        print("  Dual RTK + Bundle Adjustment Method")
+        print("\n  This wizard will guide you through the calibration process.")
+
+        # Auto-load intrinsics if default file exists
+        self._auto_load_intrinsics()
+
+        while True:
+            self._print_main_menu()
+
+            try:
+                choice = input("\n  Select option: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                break
+
+            if choice == '1':
+                self._configure_board()
+            elif choice == '2':
+                self._load_intrinsics()
+            elif choice == '3':
+                self._configure_imu()
+            elif choice == '4':
+                self._set_camera_prior()
+            elif choice == '5':
+                self._add_measurement()
+            elif choice == '6':
+                self._view_measurements()
+            elif choice == '7':
+                self._run_calibration()
+            elif choice == '8':
+                self._view_results()
+            elif choice == '9':
+                self._configure_weights()
+            elif choice == 'd':
+                self._run_demo_data()
+            elif choice == '0':
+                break
+            else:
+                print_status("Invalid option", "warn")
+
+        print_status("Goodbye!", "info")
+
+    def _print_main_menu(self):
+        """Print the main menu."""
+        print("\n" + "=" * 50)
+        print("  Main Menu")
+        print("=" * 50)
+
+        # Status indicators
+        intrinsics_status = "✓" if self.intrinsics else "○"
+        prior_status = "✓" if self.camera_prior else "○"
+        meas_count = len(self.measurements_data)
+        calibrator_status = "✓" if self.calibrator and self.calibrator.result else "○"
+
+        print(f"\n  Status:")
+        print(f"    [{intrinsics_status}] Camera intrinsics loaded")
+        print(f"    [{prior_status}] Camera prior set")
+        print(f"    [{meas_count}] Measurements collected (min 3 required)")
+        print(f"    [{calibrator_status}] Calibration complete")
+
+        print(f"\n  Configuration:")
+        print(f"  1. Configure ChArUco Board    ({self.board_config.squares_x}x{self.board_config.squares_y}, {self.board_config.square_size*100:.0f}cm squares)")
+        print(f"  2. Load Camera Intrinsics     {'[Loaded]' if self.intrinsics else '[Not loaded]'}")
+        print(f"  3. Configure IMU/RTK Offsets")
+
+        print(f"\n  Calibration Data:")
+        print(f"  4. Set Camera Prior (manual measurements)")
+        print(f"  5. Add Measurement (RTK + INS + Image)")
+        print(f"  6. View/Delete Measurements   [{meas_count} measurements]")
+
+        print(f"\n  Calibration:")
+        print(f"  7. Run Calibration")
+        print(f"  8. View/Save Results")
+        print(f"  9. Configure Optimization Weights")
+
+        print(f"\n  Other:")
+        print(f"  d. Load Demo Data (synthetic)")
+        print(f"  0. Exit")
+
+    def _auto_load_intrinsics(self):
+        """Automatically load intrinsics from default file if it exists."""
+        if os.path.exists(self.DEFAULT_INTRINSICS_PATH):
+            try:
+                with open(self.DEFAULT_INTRINSICS_PATH) as f:
+                    self.intrinsics = json.load(f)
+                self.intrinsics_path = self.DEFAULT_INTRINSICS_PATH
+                print_status(f"Auto-loaded intrinsics from {self.DEFAULT_INTRINSICS_PATH}", "ok")
+            except Exception as e:
+                print_status(f"Failed to auto-load intrinsics: {e}", "warn")
+
+    def _configure_board(self):
+        """Configure ChArUco board parameters."""
+        print_subheader("ChArUco Board Configuration")
+
+        print(f"\n  Current settings:")
+        print(f"    Squares X: {self.board_config.squares_x}")
+        print(f"    Squares Y: {self.board_config.squares_y}")
+        print(f"    Square size: {self.board_config.square_size*100:.1f} cm")
+        print(f"    Marker size: {self.board_config.marker_size*100:.1f} cm")
+        print(f"    Board dimensions: {self.board_config.board_width:.2f}m x {self.board_config.board_height:.2f}m")
+
+        if not input_yes_no("Modify settings?", False):
+            return
+
+        squares_x = input_int("Squares X", self.board_config.squares_x)
+        squares_y = input_int("Squares Y", self.board_config.squares_y)
+        square_cm = input_float("Square size (cm)", self.board_config.square_size * 100)
+        marker_cm = input_float("Marker size (cm)", self.board_config.marker_size * 100)
+
+        if all(v is not None for v in [squares_x, squares_y, square_cm, marker_cm]):
+            self.board_config = ChArUcoBoardConfig(
+                squares_x=squares_x,
+                squares_y=squares_y,
+                square_size=square_cm / 100.0,
+                marker_size=marker_cm / 100.0
+            )
+            print_status("Board configuration updated", "ok")
+
+            # Reset calibrator if exists
+            if self.calibrator:
+                self._init_calibrator()
+
+        # RTK antenna offset on board
+        print("\n  RTK Antenna Offset on Board (from board origin):")
+        print("    Board origin is at top-left corner")
+        print("    X = right, Y = down, Z = out of board")
+
+        if input_yes_no("Configure RTK antenna offset on board?", False):
+            offset = input_vector3("RTK antenna offset on board",
+                                   self.board_config.rtk_antenna_offset_board.tolist())
+            if offset is not None:
+                self.board_config.rtk_antenna_offset_board = offset
+                print_status("RTK antenna offset updated", "ok")
+
+    def _load_intrinsics(self):
+        """Load camera intrinsics."""
+        print_subheader("Camera Intrinsics")
+
+        if self.intrinsics:
+            print(f"\n  Current intrinsics:")
+            if self.intrinsics_path:
+                print(f"    Source: {self.intrinsics_path}")
+            K = self.intrinsics["camera_matrix"]
+            print(f"    Focal length: fx={K[0][0]:.1f}, fy={K[1][1]:.1f}")
+            print(f"    Principal point: cx={K[0][2]:.1f}, cy={K[1][2]:.1f}")
+            print(f"    Image size: {self.intrinsics['image_size']}")
+
+        print("\n  Options:")
+        print(f"    1. Load from JSON file (default: {self.DEFAULT_INTRINSICS_PATH})")
+        print("    2. Enter manually")
+        print("    3. Use default (1920x1080, f=1200)")
+        print("    0. Cancel")
+
+        choice = input_string("Select option", "0")
+
+        if choice == '1':
+            path = input_string("Path to intrinsics JSON file", self.DEFAULT_INTRINSICS_PATH)
+            if path and os.path.exists(path):
+                try:
+                    with open(path) as f:
+                        self.intrinsics = json.load(f)
+                    self.intrinsics_path = path
+                    print_status(f"Intrinsics loaded from {path}", "ok")
+                except Exception as e:
+                    print_status(f"Failed to load: {e}", "error")
+            else:
+                print_status("File not found", "error")
+
+        elif choice == '2':
+            print("\n  Enter camera matrix parameters:")
+            fx = input_float("Focal length X (fx)", 1200.0)
+            fy = input_float("Focal length Y (fy)", 1200.0)
+            cx = input_float("Principal point X (cx)", 960.0)
+            cy = input_float("Principal point Y (cy)", 540.0)
+            width = input_int("Image width", 1920)
+            height = input_int("Image height", 1080)
+
+            print("\n  Enter distortion coefficients (k1, k2, p1, p2, k3):")
+            k1 = input_float("k1", 0.0)
+            k2 = input_float("k2", 0.0)
+            p1 = input_float("p1", 0.0)
+            p2 = input_float("p2", 0.0)
+            k3 = input_float("k3", 0.0)
+
+            self.intrinsics = {
+                "camera_matrix": [[fx, 0, cx], [0, fy, cy], [0, 0, 1]],
+                "distortion_coefficients": [k1, k2, p1, p2, k3],
+                "image_size": [width, height]
+            }
+            self.intrinsics_path = None
+            print_status("Intrinsics set manually", "ok")
+
+        elif choice == '3':
+            self.intrinsics = {
+                "camera_matrix": [[1200, 0, 960], [0, 1200, 540], [0, 0, 1]],
+                "distortion_coefficients": [0, 0, 0, 0, 0],
+                "image_size": [1920, 1080]
+            }
+            self.intrinsics_path = "default"
+            print_status("Using default intrinsics", "ok")
+
+        # Reset calibrator if intrinsics changed
+        if self.calibrator and choice in ['1', '2', '3']:
+            self._init_calibrator()
+
+    def _configure_imu(self):
+        """Configure IMU and RTK offsets."""
+        print_subheader("IMU/RTK Configuration")
+
+        print(f"\n  Current RTK antenna offset from IMU:")
+        offset = self.imu_config.rtk_antenna_offset_imu
+        print(f"    Forward (X): {offset[0]*100:.1f} cm")
+        print(f"    Right (Y): {offset[1]*100:.1f} cm")
+        print(f"    Down (Z): {offset[2]*100:.1f} cm")
+
+        print("\n  NED Convention (vehicle body frame):")
+        print("    X = Forward")
+        print("    Y = Right")
+        print("    Z = Down")
+
+        if input_yes_no("Modify RTK antenna offset?", False):
+            print("\n  Enter RTK antenna position relative to IMU (in cm):")
+            x_cm = input_float("Forward (X) cm", offset[0] * 100)
+            y_cm = input_float("Right (Y) cm", offset[1] * 100)
+            z_cm = input_float("Down (Z) cm", offset[2] * 100)
+
+            if all(v is not None for v in [x_cm, y_cm, z_cm]):
+                self.imu_config.rtk_antenna_offset_imu = np.array([x_cm/100, y_cm/100, z_cm/100])
+                print_status("RTK antenna offset updated", "ok")
+
+    def _set_camera_prior(self):
+        """Set camera prior from manual measurements."""
+        print_subheader("Camera Prior (Manual Measurements)")
+
+        print("""
+  This step records your manual measurements of the camera mounting.
+  These serve as initial estimates and constraints for optimization.
+
+  Measurements needed:
+  1. Camera position relative to IMU (tape measure)
+  2. Camera pointing angles (protractor/inclinometer)
+
+  Coordinate System (NED - vehicle body frame):
+    X = Forward (positive toward front of vehicle)
+    Y = Right (positive toward right side)
+    Z = Down (positive toward ground)
+
+  Camera Angles:
+    Azimuth: 0° = forward, positive = right
+    Elevation: positive = looking down
+    Roll: rotation about optical axis
+        """)
+
+        if self.camera_prior:
+            print("  Current prior:")
+            print(f"    Position: [{self.camera_prior.position[0]*100:.1f}, {self.camera_prior.position[1]*100:.1f}, {self.camera_prior.position[2]*100:.1f}] cm")
+            if self.camera_prior.azimuth is not None:
+                print(f"    Azimuth: {self.camera_prior.azimuth:.1f}°")
+            if self.camera_prior.elevation is not None:
+                print(f"    Elevation: {self.camera_prior.elevation:.1f}°")
+            if self.camera_prior.roll is not None:
+                print(f"    Roll: {self.camera_prior.roll:.1f}°")
+
+        if not input_yes_no("Enter/update camera prior?", True):
+            return
+
+        # Position
+        print("\n  CAMERA POSITION (relative to IMU, in cm):")
+        defaults = self.camera_prior.position * 100 if self.camera_prior else [50.0, 0.0, -30.0]
+        x_cm = input_float("Forward (X) cm", defaults[0] if isinstance(defaults, np.ndarray) else defaults[0])
+        y_cm = input_float("Right (Y) cm", defaults[1] if isinstance(defaults, np.ndarray) else defaults[1])
+        z_cm = input_float("Down (Z) cm", defaults[2] if isinstance(defaults, np.ndarray) else defaults[2])
+
+        position = np.array([x_cm/100, y_cm/100, z_cm/100]) if all(v is not None for v in [x_cm, y_cm, z_cm]) else None
+
+        if position is None:
+            print_status("Invalid position input", "error")
+            return
+
+        # Position uncertainty
+        print("\n  Position measurement uncertainty:")
+        pos_std_cm = input_float("Position uncertainty (cm, typically 10-20)", 15.0)
+        position_std = np.array([pos_std_cm/100, pos_std_cm/100, pos_std_cm/100])
+
+        # Orientation
+        print("\n  CAMERA ORIENTATION:")
+        defaults_ang = [
+            self.camera_prior.azimuth if self.camera_prior and self.camera_prior.azimuth is not None else 0.0,
+            self.camera_prior.elevation if self.camera_prior and self.camera_prior.elevation is not None else 0.0,
+            self.camera_prior.roll if self.camera_prior and self.camera_prior.roll is not None else 0.0
+        ]
+
+        azimuth = input_float("Azimuth (degrees, 0=forward, +right)", defaults_ang[0])
+        elevation = input_float("Elevation (degrees, +down)", defaults_ang[1])
+        roll = input_float("Roll (degrees)", defaults_ang[2])
+
+        # Orientation uncertainty
+        orient_std = input_float("Orientation uncertainty (degrees, typically 5-10)", 5.0)
+
+        self.camera_prior = CameraPrior(
+            position=position,
+            position_std=position_std,
+            azimuth=azimuth,
+            elevation=elevation,
+            roll=roll,
+            orientation_std_deg=orient_std
+        )
+
+        print_status("Camera prior set", "ok")
+
+        # Update calibrator if exists
+        if self.calibrator:
+            self.calibrator.set_prior(self.camera_prior)
+
+    def _init_calibrator(self):
+        """Initialize or reset the calibrator."""
+        if not self.intrinsics:
+            print_status("Please load intrinsics first", "warn")
+            return False
+
+        self.calibrator = ExtrinsicCalibrator(
+            self.board_config,
+            self.intrinsics,
+            self.camera_id,
+            self.calibration_config,
+            self.imu_config
+        )
+
+        if self.camera_prior:
+            self.calibrator.set_prior(self.camera_prior)
+
+        # Re-add existing measurements
+        for mdata in self.measurements_data:
+            if mdata.get('image') is not None:
+                self.calibrator.add_measurement(
+                    mdata['image'],
+                    mdata['ins_data'],
+                    mdata.get('board_rtk'),
+                    mdata.get('vehicle_rtk')
+                )
+
+        return True
+
+    def _add_measurement(self):
+        """Add a calibration measurement."""
+        print_subheader("Add Calibration Measurement")
+
+        if not self.intrinsics:
+            print_status("Please load camera intrinsics first (option 2)", "error")
+            return
+
+        if not self.calibrator:
+            self._init_calibrator()
+
+        meas_num = len(self.measurements_data) + 1
+        print(f"\n  Measurement #{meas_num}")
+        print("-" * 40)
+
+        # INS Data
+        print("\n  INS/IMU DATA (at time of image capture):")
+        print("    Enter current INS readings (yaw/pitch/roll in degrees)")
+        print("    NED convention: Yaw 0°=North, +East; Pitch +nose down; Roll +right wing down")
+
+        yaw = input_float("Yaw (degrees)", 0.0)
+        pitch = input_float("Pitch (degrees)", 0.0)
+        roll = input_float("Roll (degrees)", 0.0)
+
+        if yaw is None or pitch is None or roll is None:
+            print_status("Invalid INS data", "error")
+            return
+
+        ins_data = INSData(yaw=yaw, pitch=pitch, roll=roll)
+
+        # Board RTK
+        print("\n  BOARD RTK POSITION (world frame - NED):")
+        print("    Enter RTK reading from antenna on/near the ChArUco board")
+        print("    North-East-Down coordinates relative to origin")
+
+        board_n = input_float("North (meters)")
+        board_e = input_float("East (meters)")
+        board_d = input_float("Down (meters, negative = above ground)")
+        board_std = input_float("RTK std dev (meters)", 0.02)
+
+        board_rtk = None
+        if all(v is not None for v in [board_n, board_e, board_d]):
+            board_rtk = RTKMeasurement(
+                position_world=np.array([board_n, board_e, board_d]),
+                std=board_std
+            )
+
+        # Vehicle RTK
+        print("\n  VEHICLE RTK POSITION (world frame - NED):")
+        print("    Enter RTK reading from antenna on the vehicle/IMU")
+
+        veh_n = input_float("North (meters)")
+        veh_e = input_float("East (meters)")
+        veh_d = input_float("Down (meters)")
+        veh_std = input_float("RTK std dev (meters)", 0.02)
+
+        vehicle_rtk = None
+        if all(v is not None for v in [veh_n, veh_e, veh_d]):
+            vehicle_rtk = RTKMeasurement(
+                position_world=np.array([veh_n, veh_e, veh_d]),
+                std=veh_std
+            )
+
+        # Image
+        print("\n  IMAGE:")
+        print("    1. Load from file")
+        print("    2. Capture from camera (requires camera_streaming)")
+        print("    0. Cancel")
+
+        img_choice = input_string("Select option", "1")
+
+        image = None
+        image_path = None
+
+        if img_choice == '1':
+            image_path = input_string("Path to image file")
+            if image_path and os.path.exists(image_path):
+                image = cv2.imread(image_path)
+                if image is None:
+                    print_status(f"Failed to load image: {image_path}", "error")
+                    return
+            else:
+                print_status("Image file not found", "error")
+                return
+        elif img_choice == '2':
+            print_status("Camera capture not yet integrated. Please use image file.", "warn")
+            return
+        else:
+            print_status("Measurement cancelled", "info")
+            return
+
+        # Add to calibrator
+        result = self.calibrator.add_measurement(
+            image, ins_data, board_rtk, vehicle_rtk
+        )
+
+        if result["success"]:
+            # Store measurement data
+            self.measurements_data.append({
+                'ins_data': ins_data,
+                'board_rtk': board_rtk,
+                'vehicle_rtk': vehicle_rtk,
+                'image': image,
+                'image_path': image_path,
+                'result': result
+            })
+
+            print_status(f"Measurement added successfully", "ok")
+            print(f"    Corners detected: {result['corners_detected']}")
+            print(f"    PnP reprojection error: {result['reproj_error']:.3f} pixels")
+            print(f"    Board distance (PnP): {result['pnp_distance']:.2f} m")
+        else:
+            print_status(f"Failed to add measurement: {result['error']}", "error")
+
+    def _view_measurements(self):
+        """View and manage measurements."""
+        print_subheader("Measurements")
+
+        if not self.measurements_data:
+            print_status("No measurements collected yet", "info")
+            return
+
+        print(f"\n  Total measurements: {len(self.measurements_data)}")
+        print("-" * 60)
+
+        for i, mdata in enumerate(self.measurements_data):
+            ins = mdata['ins_data']
+            print(f"\n  [{i+1}] Measurement #{i+1}")
+            print(f"      INS: yaw={ins.yaw:.1f}°, pitch={ins.pitch:.1f}°, roll={ins.roll:.1f}°")
+
+            if mdata.get('board_rtk'):
+                rtk = mdata['board_rtk'].position_world
+                print(f"      Board RTK: N={rtk[0]:.3f}, E={rtk[1]:.3f}, D={rtk[2]:.3f}")
+
+            if mdata.get('vehicle_rtk'):
+                rtk = mdata['vehicle_rtk'].position_world
+                print(f"      Vehicle RTK: N={rtk[0]:.3f}, E={rtk[1]:.3f}, D={rtk[2]:.3f}")
+
+            if mdata.get('image_path'):
+                print(f"      Image: {mdata['image_path']}")
+
+            if mdata.get('result'):
+                r = mdata['result']
+                print(f"      Corners: {r['corners_detected']}, Error: {r['reproj_error']:.3f}px")
+
+        print("\n  Options:")
+        print("    d <num> - Delete measurement (e.g., 'd 1')")
+        print("    c       - Clear all measurements")
+        print("    Enter   - Return to main menu")
+
+        cmd = input_string("Command", "")
+
+        if cmd and cmd.startswith('d '):
+            try:
+                idx = int(cmd.split()[1]) - 1
+                if 0 <= idx < len(self.measurements_data):
+                    self.measurements_data.pop(idx)
+                    # Re-initialize calibrator
+                    self._init_calibrator()
+                    print_status(f"Measurement {idx+1} deleted", "ok")
+                else:
+                    print_status("Invalid measurement number", "error")
+            except (ValueError, IndexError):
+                print_status("Invalid command", "error")
+        elif cmd == 'c':
+            if input_yes_no("Clear all measurements?", False):
+                self.measurements_data = []
+                self._init_calibrator()
+                print_status("All measurements cleared", "ok")
+
+    def _run_calibration(self):
+        """Run the calibration optimization."""
+        print_subheader("Run Calibration")
+
+        # Check prerequisites
+        if not self.intrinsics:
+            print_status("Please load camera intrinsics first", "error")
+            return
+
+        if len(self.measurements_data) < 3:
+            print_status(f"Need at least 3 measurements (have {len(self.measurements_data)})", "error")
+            return
+
+        if not self.calibrator:
+            self._init_calibrator()
+
+        print(f"\n  Configuration:")
+        print(f"    Measurements: {len(self.measurements_data)}")
+        print(f"    Camera prior: {'Set' if self.camera_prior else 'Not set'}")
+        print(f"    Max iterations: {self.calibration_config.max_iterations}")
+
+        if not input_yes_no("Proceed with calibration?", True):
+            return
+
+        print("\n  Running bundle adjustment optimization...")
+        print("  (this may take a few seconds)")
+
+        try:
+            result = self.calibrator.compute_extrinsics()
+
+            q = result["quality_metrics"]
+            status = "ok" if q["optimization_converged"] else "warn"
+            print_status(f"Optimization {'converged' if q['optimization_converged'] else 'did NOT converge'}", status)
+            print(f"    Final cost: {q['final_cost']:.2f}")
+            print(f"    Mean reprojection error: {q['mean_reproj_error_px']:.3f} px")
+            print(f"    Max reprojection error: {q['max_reproj_error_px']:.3f} px")
+
+            print_status("Calibration complete! Use option 8 to view results.", "ok")
+
+        except Exception as e:
+            print_status(f"Calibration failed: {e}", "error")
+
+    def _view_results(self):
+        """View and save calibration results."""
+        print_subheader("Calibration Results")
+
+        if not self.calibrator or not self.calibrator.result:
+            print_status("No calibration results available. Run calibration first.", "warn")
+            return
+
+        result = self.calibrator.result
+
+        t = np.array(result["imu_to_camera_transform"]["translation_vector"])
+        angles = result["imu_to_camera_transform"]["euler_angles"]
+
+        print("\n  IMU-TO-CAMERA TRANSFORM (T_IC):")
+        print("  " + "-" * 45)
+        print(f"    Position (camera in IMU frame):")
+        print(f"      Forward (X): {t[0]*100:+.2f} cm")
+        print(f"      Right (Y):   {t[1]*100:+.2f} cm")
+        print(f"      Down (Z):    {t[2]*100:+.2f} cm")
+        print(f"\n    Orientation (camera pointing direction):")
+        print(f"      Azimuth:     {angles['azimuth']:+.2f}° (0=forward, +right)")
+        print(f"      Elevation:   {angles['elevation']:+.2f}° (+down)")
+        print(f"      Roll:        {angles['roll']:+.2f}°")
+
+        imu = result["imu_world_pose"]
+        print(f"\n  IMU WORLD POSE:")
+        print(f"    Position: {imu['translation_vector']}")
+        print(f"    Orientation (YPR): {imu['euler_angles_ypr_deg']}")
+
+        q = result["quality_metrics"]
+        print(f"\n  QUALITY METRICS:")
+        print(f"    Measurements: {q['num_measurements']}")
+        print(f"    Converged: {q['optimization_converged']}")
+        print(f"    Mean reproj error: {q['mean_reproj_error_px']:.3f} px")
+        print(f"    Max reproj error: {q['max_reproj_error_px']:.3f} px")
+
+        # Save option
+        print(f"\n  Current output path: {self.output_path}")
+
+        if input_yes_no("Save results to file?", True):
+            new_path = input_string("Output path", self.output_path)
+            if new_path:
+                self.output_path = new_path
+                try:
+                    self.calibrator.save_to_json(self.output_path)
+                except Exception as e:
+                    print_status(f"Failed to save: {e}", "error")
+
+    def _configure_weights(self):
+        """Configure optimization weights."""
+        print_subheader("Optimization Weights")
+
+        cfg = self.calibration_config
+
+        print("\n  Current weights:")
+        print(f"    Reprojection:    {cfg.weight_reprojection:.1f}")
+        print(f"    Board RTK:       {cfg.weight_rtk_board:.1f}")
+        print(f"    Vehicle RTK:     {cfg.weight_rtk_vehicle:.1f}")
+        print(f"    IMU attitude:    {cfg.weight_imu_attitude:.1f}")
+        print(f"    Board levelness: {cfg.weight_board_level:.1f}")
+        print(f"    Camera prior:    {cfg.weight_camera_prior:.1f}")
+
+        print("\n  Standard deviations:")
+        print(f"    Corner detection: {cfg.corner_detection_std_px:.1f} px")
+        print(f"    RTK position:     {cfg.rtk_position_std*100:.1f} cm")
+        print(f"    IMU attitude:     {cfg.imu_attitude_std_deg:.1f}°")
+
+        if not input_yes_no("Modify settings?", False):
+            return
+
+        print("\n  Enter new weights (higher = more important):")
+        cfg.weight_reprojection = input_float("Reprojection weight", cfg.weight_reprojection) or cfg.weight_reprojection
+        cfg.weight_rtk_board = input_float("Board RTK weight", cfg.weight_rtk_board) or cfg.weight_rtk_board
+        cfg.weight_rtk_vehicle = input_float("Vehicle RTK weight", cfg.weight_rtk_vehicle) or cfg.weight_rtk_vehicle
+        cfg.weight_imu_attitude = input_float("IMU attitude weight", cfg.weight_imu_attitude) or cfg.weight_imu_attitude
+        cfg.weight_board_level = input_float("Board levelness weight", cfg.weight_board_level) or cfg.weight_board_level
+        cfg.weight_camera_prior = input_float("Camera prior weight", cfg.weight_camera_prior) or cfg.weight_camera_prior
+
+        print_status("Weights updated", "ok")
+
+        # Re-init calibrator with new config
+        if self.calibrator:
+            self.calibrator.config = cfg
+
+    def _run_demo_data(self):
+        """Load demo/synthetic data."""
+        print_subheader("Load Demo Data")
+
+        print("""
+  This will generate synthetic calibration data using
+  simulated ground truth values. Useful for testing
+  the calibration workflow.
+        """)
+
+        if self.measurements_data:
+            print_status(f"Warning: This will replace {len(self.measurements_data)} existing measurements", "warn")
+
+        if not input_yes_no("Generate synthetic demo data?", True):
+            return
+
+        # Use default intrinsics
+        self.intrinsics = {
+            "camera_matrix": [[1200, 0, 960], [0, 1200, 540], [0, 0, 1]],
+            "distortion_coefficients": [0, 0, 0, 0, 0],
+            "image_size": [1920, 1080]
+        }
+
+        # Ground truth
+        true_camera_to_imu = np.array([0.5, 0.2, -0.3])
+        true_camera_angles = {"azimuth": 15.0, "elevation": 5.0, "roll": 0.5}
+        imu_position_world = np.array([0.0, 0.0, -1.5])
+        ins_euler = {"yaw": 45.0, "pitch": 0.0, "roll": 0.0}
+
+        np.random.seed(42)
+
+        # Set up synthetic generator
+        synth = SyntheticTest(self.board_config, self.intrinsics, true_camera_to_imu,
+                              true_camera_angles, imu_position_world, ins_euler)
+
+        # Set camera prior (with some error)
+        measured_position = true_camera_to_imu + np.array([0.08, -0.05, 0.03])
+        measured_azimuth = true_camera_angles["azimuth"] + 2.0
+        measured_elevation = true_camera_angles["elevation"] + 1.0
+
+        self.camera_prior = CameraPrior(
+            position=measured_position,
+            position_std=np.array([0.15, 0.15, 0.15]),
+            azimuth=measured_azimuth,
+            elevation=measured_elevation,
+            roll=0.0,
+            orientation_std_deg=5.0
+        )
+
+        # Initialize calibrator
+        self._init_calibrator()
+
+        # Generate measurements
+        self.measurements_data = []
+        num_measurements = 5
+
+        R_WC, _ = SE3.to_Rt(synth.T_WC)
+        camera_z_world = R_WC @ np.array([0, 0, 1])
+        camera_x_world = R_WC @ np.array([1, 0, 0])
+
+        print(f"\n  Generating {num_measurements} synthetic measurements...")
+
+        for i in range(num_measurements):
+            dist = 2.5 + i * 0.4
+            lateral = (i - num_measurements//2) * 0.25
+            height_offset = (i - num_measurements//2) * 0.10
+
+            board_center = synth.camera_pos_world + dist * camera_z_world + lateral * camera_x_world
+            board_center[2] = synth.camera_pos_world[2] + height_offset
+
+            to_camera = synth.camera_pos_world - board_center
+            to_camera[2] = 0
+            board_yaw = np.degrees(np.arctan2(to_camera[1], to_camera[0]))
+
+            board_pitch = np.random.uniform(-3, 3)
+            board_roll = np.random.uniform(-3, 3)
+
+            image, data = synth.generate_measurement(board_center, board_yaw, board_pitch, board_roll, 0.015)
+
+            if image is not None:
+                result = self.calibrator.add_measurement(
+                    image, data["ins_data"],
+                    board_rtk=data["board_rtk"],
+                    vehicle_rtk=data["vehicle_rtk"]
+                )
+
+                if result["success"]:
+                    self.measurements_data.append({
+                        'ins_data': data["ins_data"],
+                        'board_rtk': data["board_rtk"],
+                        'vehicle_rtk': data["vehicle_rtk"],
+                        'image': image,
+                        'image_path': f"synthetic_{i+1}",
+                        'result': result
+                    })
+                    print(f"    Measurement {i+1}: {result['corners_detected']} corners, {result['reproj_error']:.2f}px error")
+
+        print_status(f"Loaded {len(self.measurements_data)} synthetic measurements", "ok")
+        print("\n  Ground truth (for verification):")
+        print(f"    Camera position: [{true_camera_to_imu[0]*100:.1f}, {true_camera_to_imu[1]*100:.1f}, {true_camera_to_imu[2]*100:.1f}] cm")
+        print(f"    Camera angles: az={true_camera_angles['azimuth']:.1f}°, el={true_camera_angles['elevation']:.1f}°")
+
+
+def interactive_menu():
+    """Run the interactive calibration menu."""
+    menu = ExtrinsicCalibrationMenu()
+    menu.run()
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Extrinsic Camera Calibration - Dual RTK + Bundle Adjustment")
+    parser = argparse.ArgumentParser(
+        description="Extrinsic Camera Calibration - Dual RTK + Bundle Adjustment",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python3 extrinsic_calibration.py                # Interactive menu
+  python3 extrinsic_calibration.py menu           # Interactive menu (explicit)
+  python3 extrinsic_calibration.py --demo         # Run demo with synthetic data
+  python3 extrinsic_calibration.py --demo -n 8    # Demo with 8 measurements
+        """
+    )
+
+    parser.add_argument(
+        'command',
+        nargs='?',
+        choices=['menu', 'demo'],
+        default='menu',
+        help='Command to run (default: menu)'
+    )
     parser.add_argument("--demo", action="store_true", help="Run demo with synthetic data")
     parser.add_argument("--intrinsics", "-i", help="Path to intrinsics JSON file")
     parser.add_argument("--output", "-o", default="camera_extrinsics.json", help="Output JSON file")
-    parser.add_argument("--num", "-n", type=int, default=5, help="Number of board positions")
-    
+    parser.add_argument("--num", "-n", type=int, default=5, help="Number of board positions for demo")
+
     args = parser.parse_args()
-    
-    if args.demo:
+
+    if args.demo or args.command == 'demo':
         run_demo(args.num, args.intrinsics, args.output)
     else:
-        print("Extrinsic Camera Calibration - Dual RTK + Bundle Adjustment")
-        print("\nUsage: python extrinsic_calibration.py --demo [-i INTRINSICS] [-n NUM] [-o OUTPUT]")
-    
+        interactive_menu()
+
     return 0
 
 
