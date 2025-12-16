@@ -32,11 +32,17 @@ RESIDUALS:
 5. Board levelness prior: soft constraint for roughly vertical board
 """
 
+import os
+
+# Set environment variables to avoid Qt threading issues with OpenCV
+# CRITICAL: This must be done BEFORE cv2 is imported
+os.environ.setdefault('QT_QPA_PLATFORM', 'xcb')
+os.environ.setdefault('OPENCV_VIDEOIO_PRIORITY_QT', '0')
+
 import cv2
 import numpy as np
 import json
 import sys
-import os
 import argparse
 from dataclasses import dataclass, field
 from datetime import datetime
