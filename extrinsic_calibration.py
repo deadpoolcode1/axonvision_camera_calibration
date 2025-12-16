@@ -55,6 +55,15 @@ from scipy.spatial.transform import Rotation
 from scipy.optimize import least_squares
 import warnings
 
+# INS serial reader (optional, for real INS hardware)
+try:
+    from ins_reader import INSSerialReader, INSReading
+    INS_AVAILABLE = True
+except ImportError:
+    INS_AVAILABLE = False
+    INSSerialReader = None
+    INSReading = None
+
 
 # =============================================================================
 # CONFIGURATION
@@ -1303,12 +1312,14 @@ class ExtrinsicCalibrationMenu:
 
     DEFAULT_INTRINSICS_PATH = "camera_intrinsics.json"
 
-    def __init__(self, camera_source=None):
+    def __init__(self, camera_source=None, ins_reader=None):
         """Initialize extrinsic calibration menu.
 
         Args:
             camera_source: Optional camera source object with get_image() method
                           for live camera capture. If None, only file loading is available.
+            ins_reader: Optional INS reader object with get_latest() method
+                       for real-time INS data. If None, manual entry is used.
         """
         self.board_config = ChArUcoBoardConfig()
         self.calibration_config = CalibrationConfig()
@@ -1321,6 +1332,7 @@ class ExtrinsicCalibrationMenu:
         self.camera_id = "camera_front"
         self.output_path = "camera_extrinsics.json"
         self.camera_source = camera_source  # Camera source for live capture
+        self.ins_reader = ins_reader  # INS reader for real-time attitude data
 
     def run(self):
         """Run the interactive menu."""
@@ -1379,11 +1391,25 @@ class ExtrinsicCalibrationMenu:
         meas_count = len(self.measurements_data)
         calibrator_status = "✓" if self.calibrator and self.calibrator.result else "○"
 
+        # INS status
+        if self.ins_reader and hasattr(self.ins_reader, 'get_latest'):
+            ins_data = self.ins_reader.get_latest()
+            if ins_data:
+                ins_status = "✓ LIVE"
+                ins_detail = f"Yaw:{ins_data.yaw:.1f}° Pitch:{ins_data.pitch:.1f}° Roll:{ins_data.roll:.1f}°"
+            else:
+                ins_status = "○ NO DATA"
+                ins_detail = "Waiting for INS data..."
+        else:
+            ins_status = "○ MANUAL"
+            ins_detail = "No INS reader connected"
+
         print(f"\n  Status:")
         print(f"    [{intrinsics_status}] Camera intrinsics loaded")
         print(f"    [{prior_status}] Camera prior set")
         print(f"    [{meas_count}] Measurements collected (min 3 required)")
         print(f"    [{calibrator_status}] Calibration complete")
+        print(f"    [{ins_status}] INS: {ins_detail}")
 
         print(f"\n  Configuration:")
         print(f"  1. Configure ChArUco Board    ({self.board_config.squares_x}x{self.board_config.squares_y}, {self.board_config.square_size*100:.0f}cm squares)")
@@ -1905,20 +1931,53 @@ class ExtrinsicCalibrationMenu:
         print(f"\n  Measurement #{meas_num}")
         print("-" * 40)
 
-        # INS Data
+        # INS Data - automatic from serial reader or manual entry
         print("\n  INS/IMU DATA (at time of image capture):")
-        print("    Enter current INS readings (yaw/pitch/roll in degrees)")
-        print("    NED convention: Yaw 0°=North, +East; Pitch +nose down; Roll +right wing down")
 
-        yaw = input_float("Yaw (degrees)", 0.0)
-        pitch = input_float("Pitch (degrees)", 0.0)
-        roll = input_float("Roll (degrees)", 0.0)
+        yaw = None
+        pitch = None
+        roll = None
+        ins_timestamp = 0.0
+
+        # Try to get INS data from reader if available
+        if self.ins_reader and hasattr(self.ins_reader, 'get_latest'):
+            ins_reading = self.ins_reader.get_latest()
+            if ins_reading:
+                yaw = ins_reading.yaw
+                pitch = ins_reading.pitch
+                roll = ins_reading.roll
+                ins_timestamp = ins_reading.timestamp
+                valid_str = "VALID" if ins_reading.is_valid() else "INITIALIZING"
+                print(f"    [INS LIVE] Reading from hardware INS ({valid_str})")
+                print(f"    Yaw: {yaw:.3f}°  Pitch: {pitch:.3f}°  Roll: {roll:.3f}°")
+                if hasattr(ins_reading, 'att_uncertainty'):
+                    print(f"    Attitude uncertainty: {ins_reading.att_uncertainty:.2f}°")
+
+                # Allow user to override if desired
+                if input_yes_no("Use this INS reading?", True):
+                    pass  # Keep the values
+                else:
+                    print("    Switching to manual entry...")
+                    yaw = None  # Will trigger manual entry below
+            else:
+                print("    [INS] Reader connected but no data yet. Using manual entry.")
+        else:
+            print("    [INS] No hardware INS connected. Using manual entry.")
+
+        # Manual entry if no INS reader or user declined automatic reading
+        if yaw is None:
+            print("    Enter current INS readings (yaw/pitch/roll in degrees)")
+            print("    NED convention: Yaw 0°=North, +East; Pitch +nose down; Roll +right wing down")
+
+            yaw = input_float("Yaw (degrees)", 0.0)
+            pitch = input_float("Pitch (degrees)", 0.0)
+            roll = input_float("Roll (degrees)", 0.0)
 
         if yaw is None or pitch is None or roll is None:
             print_status("Invalid INS data", "error")
             return
 
-        ins_data = INSData(yaw=yaw, pitch=pitch, roll=roll)
+        ins_data = INSData(yaw=yaw, pitch=pitch, roll=roll, timestamp=ins_timestamp)
 
         # Board RTK
         print("\n  BOARD RTK POSITION (world frame - NED):")

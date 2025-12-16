@@ -16,3 +16,6 @@ requests>=2.25.0
 
 # PDF report generation (optional - for --generate-pdf)
 reportlab>=4.0.0
+
+# Serial communication for INS hardware (VectorNav)
+pyserial>=3.5
