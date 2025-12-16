@@ -57,6 +57,14 @@ except ImportError:
     print("ERROR: 'opencv-contrib-python' not found. Install with: pip install opencv-contrib-python==4.8.1.78")
     sys.exit(1)
 
+# INS reader (optional, for real INS hardware)
+try:
+    from ins_reader import INSSerialReader
+    INS_AVAILABLE = True
+except ImportError:
+    INS_AVAILABLE = False
+    INSSerialReader = None
+
 
 class StatusColor:
     """ANSI color codes for terminal output"""
@@ -793,8 +801,13 @@ def run_quick_capture(config: CameraConfig, output_file: str = "capture.png"):
             return 1
 
 
-def run_calibration_stage_menu(config: CameraConfig):
-    """Show calibration stage selection menu."""
+def run_calibration_stage_menu(config: CameraConfig, ins_port: str = '/dev/ttyUSB0'):
+    """Show calibration stage selection menu.
+
+    Args:
+        config: Camera configuration
+        ins_port: Serial port for INS device (default: /dev/ttyUSB0)
+    """
     while True:
         print("\n" + "=" * 50)
         print("  Calibration Stage Selection")
@@ -809,6 +822,7 @@ def run_calibration_stage_menu(config: CameraConfig):
         print("     - Determines camera position & orientation")
         print("     - Requires intrinsic calibration first")
         print("     - Uses RTK + INS + Bundle Adjustment")
+        print(f"     - INS port: {ins_port}")
         print()
         print("  0. Back to Main Menu")
         print()
@@ -822,15 +836,20 @@ def run_calibration_stage_menu(config: CameraConfig):
         if choice == '1':
             run_intrinsic_calibration_mode(config)
         elif choice == '2':
-            run_extrinsic_calibration_mode(config)
+            run_extrinsic_calibration_mode(config, ins_port=ins_port)
         elif choice == '0':
             break
         else:
             print_status("Invalid option", "warn")
 
 
-def run_extrinsic_calibration_mode(config: CameraConfig):
-    """Run extrinsic calibration menu with live camera support."""
+def run_extrinsic_calibration_mode(config: CameraConfig, ins_port: str = '/dev/ttyUSB0'):
+    """Run extrinsic calibration menu with live camera and INS support.
+
+    Args:
+        config: Camera configuration
+        ins_port: Serial port for INS device (default: /dev/ttyUSB0)
+    """
     print_header("Extrinsic Camera Calibration")
 
     # Check if extrinsic_calibration module exists
@@ -847,6 +866,31 @@ def run_extrinsic_calibration_mode(config: CameraConfig):
         print("  Intrinsic calibration should be completed first.")
         print("  You can still proceed, but will need to load intrinsics manually.")
         print()
+
+    # Connect to INS for real-time attitude data
+    ins_reader = None
+    if INS_AVAILABLE and INSSerialReader is not None:
+        print_status(f"Connecting to INS on {ins_port}...", "info")
+        ins_reader = INSSerialReader(port=ins_port)
+        if ins_reader.connect():
+            # Wait a moment for first reading
+            import time
+            time.sleep(0.5)
+            reading = ins_reader.get_latest()
+            if reading:
+                print_status(f"INS connected - Yaw:{reading.yaw:.1f}° Pitch:{reading.pitch:.1f}° Roll:{reading.roll:.1f}°", "ok")
+            else:
+                print_status("INS connected - waiting for data...", "ok")
+        else:
+            print_status(f"Failed to connect to INS on {ins_port}", "warn")
+            print("  INS data will need to be entered manually.")
+            print("  Check that the device is connected and not in use by another program.")
+            ins_reader = None
+    else:
+        print_status("INS reader not available (pyserial not installed)", "warn")
+        print("  INS data will need to be entered manually.")
+        print("  Install pyserial with: pip install pyserial")
+    print()
 
     # Connect to camera for live capture support
     print_status("Connecting to camera for live capture...", "info")
@@ -880,9 +924,9 @@ def run_extrinsic_calibration_mode(config: CameraConfig):
                 print_status("Camera connected - live capture enabled", "ok")
                 print()
 
-    # Run the extrinsic calibration menu with camera source
+    # Run the extrinsic calibration menu with camera source and INS reader
     try:
-        menu = ec.ExtrinsicCalibrationMenu(camera_source=camera_source)
+        menu = ec.ExtrinsicCalibrationMenu(camera_source=camera_source, ins_reader=ins_reader)
         menu.run()
         return 0
     except Exception as e:
@@ -895,6 +939,10 @@ def run_extrinsic_calibration_mode(config: CameraConfig):
         if camera_source is not None:
             camera_source.release()
             print_status("Camera connection closed", "info")
+        # Clean up INS connection
+        if ins_reader is not None:
+            ins_reader.disconnect()
+            print_status("INS connection closed", "info")
 
 
 def run_intrinsic_calibration_mode(config: CameraConfig):
@@ -1265,6 +1313,12 @@ Examples:
         help='Output filename for capture command (default: capture.png)'
     )
 
+    parser.add_argument(
+        '--ins-port',
+        default='/dev/ttyUSB0',
+        help='INS serial port for extrinsic calibration (default: /dev/ttyUSB0)'
+    )
+
     args = parser.parse_args()
 
     # Create config
@@ -1285,7 +1339,7 @@ Examples:
     elif args.command == 'capture':
         return run_quick_capture(config, args.output)
     elif args.command == 'calibrate':
-        return run_calibration_stage_menu(config)
+        return run_calibration_stage_menu(config, ins_port=args.ins_port)
     elif args.command == 'start':
         controller = CameraStreamController(config)
         success, msg = controller.start_stream()
