@@ -1192,8 +1192,13 @@ def run_intrinsic_calibration_mode(config: CameraConfig):
         return 1
 
 
-def interactive_menu(config: CameraConfig):
-    """Run interactive CLI menu"""
+def interactive_menu(config: CameraConfig, ins_port: str = '/dev/ttyUSB0'):
+    """Run interactive CLI menu
+
+    Args:
+        config: Camera configuration
+        ins_port: Serial port for INS device (default: /dev/ttyUSB0)
+    """
     print_header("AxonVision Camera Control")
     print(f"Camera: {config.ip}:{config.api_port}")
     print(f"Stream: {config.multicast_host}:{config.stream_port}")
@@ -1229,7 +1234,7 @@ def interactive_menu(config: CameraConfig):
             filename = input("Output filename [capture.png]: ").strip() or "capture.png"
             run_quick_capture(config, filename)
         elif choice == '5':
-            run_calibration_stage_menu(config)
+            run_calibration_stage_menu(config, ins_port=ins_port)
         elif choice == '6':
             controller = CameraStreamController(config)
             success, msg = controller.start_stream()
@@ -1354,7 +1359,7 @@ Examples:
         print_status(msg, "ok" if success else "error")
         return 0 if success else 1
     else:  # menu
-        interactive_menu(config)
+        interactive_menu(config, ins_port=args.ins_port)
         return 0
 
 
