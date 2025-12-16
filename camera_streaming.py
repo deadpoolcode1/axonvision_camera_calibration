@@ -767,9 +767,76 @@ def run_quick_capture(config: CameraConfig, output_file: str = "capture.png"):
             return 1
 
 
-def run_calibration_mode(config: CameraConfig):
+def run_calibration_stage_menu(config: CameraConfig):
+    """Show calibration stage selection menu."""
+    while True:
+        print("\n" + "=" * 50)
+        print("  Calibration Stage Selection")
+        print("=" * 50)
+        print("\n  Select calibration type:")
+        print("  1. Intrinsic Calibration (lens parameters)")
+        print("     - Determines focal length, distortion, etc.")
+        print("     - Required before extrinsic calibration")
+        print("     - Uses ChArUco board detection")
+        print()
+        print("  2. Extrinsic Calibration (camera pose)")
+        print("     - Determines camera position & orientation")
+        print("     - Requires intrinsic calibration first")
+        print("     - Uses RTK + INS + Bundle Adjustment")
+        print()
+        print("  0. Back to Main Menu")
+        print()
+
+        try:
+            choice = input("  Select option: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+
+        if choice == '1':
+            run_intrinsic_calibration_mode(config)
+        elif choice == '2':
+            run_extrinsic_calibration_mode(config)
+        elif choice == '0':
+            break
+        else:
+            print_status("Invalid option", "warn")
+
+
+def run_extrinsic_calibration_mode(config: CameraConfig):
+    """Run extrinsic calibration menu."""
+    print_header("Extrinsic Camera Calibration")
+
+    # Check if extrinsic_calibration module exists
+    try:
+        import extrinsic_calibration as ec
+    except ImportError:
+        print_status("extrinsic_calibration.py not found in current directory", "error")
+        return 1
+
+    # Check if intrinsics file exists
+    intrinsics_path = "camera_intrinsics.json"
+    if not os.path.exists(intrinsics_path):
+        print_status("Warning: camera_intrinsics.json not found", "warn")
+        print("  Intrinsic calibration should be completed first.")
+        print("  You can still proceed, but will need to load intrinsics manually.")
+        print()
+
+    # Run the extrinsic calibration menu
+    try:
+        menu = ec.ExtrinsicCalibrationMenu()
+        menu.run()
+        return 0
+    except Exception as e:
+        import traceback
+        print_status(f"Extrinsic calibration error: {str(e)}", "error")
+        traceback.print_exc()
+        return 1
+
+
+def run_intrinsic_calibration_mode(config: CameraConfig):
     """Run intrinsic calibration with live camera"""
-    print_header("Live Camera Calibration")
+    print_header("Intrinsic Camera Calibration")
 
     # Check if intrinsic_calibration module exists
     try:
@@ -1051,7 +1118,7 @@ def interactive_menu(config: CameraConfig):
             filename = input("Output filename [capture.png]: ").strip() or "capture.png"
             run_quick_capture(config, filename)
         elif choice == '5':
-            run_calibration_mode(config)
+            run_calibration_stage_menu(config)
         elif choice == '6':
             controller = CameraStreamController(config)
             success, msg = controller.start_stream()
@@ -1155,7 +1222,7 @@ Examples:
     elif args.command == 'capture':
         return run_quick_capture(config, args.output)
     elif args.command == 'calibrate':
-        return run_calibration_mode(config)
+        return run_calibration_stage_menu(config)
     elif args.command == 'start':
         controller = CameraStreamController(config)
         success, msg = controller.start_stream()
