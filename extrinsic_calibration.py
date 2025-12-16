@@ -353,10 +353,41 @@ class ChArUcoDetector:
             self._init_legacy_detector()
 
         # Initialize corners_3d (needed for both API versions)
+        # NOTE: Accessing board.chessboardCorners can cause segfault in some OpenCV builds
+        # (especially 4.6.x), so we use a safe fallback to manual computation
+        self.corners_3d = self._get_chessboard_corners_safe()
+
+    def _get_chessboard_corners_safe(self) -> np.ndarray:
+        """Get chessboard corners safely, with fallback to manual computation.
+
+        Some OpenCV builds (especially 4.6.x) segfault when accessing the
+        chessboardCorners property. This method tries safe approaches first,
+        then falls back to manual computation.
+        """
+        # Try getChessboardCorners() method first (safest)
         if hasattr(self.board, 'getChessboardCorners'):
-            self.corners_3d = self.board.getChessboardCorners()
-        else:
-            self.corners_3d = self.board.chessboardCorners
+            try:
+                corners = self.board.getChessboardCorners()
+                if corners is not None:
+                    return corners
+            except Exception:
+                pass
+
+        # Fallback: compute corners manually from board configuration
+        # ChArUco inner corners are at grid positions (i * square_size, j * square_size, 0)
+        # where i in [1, squares_x-1] and j in [1, squares_y-1]
+        num_corners_x = self.config.squares_x - 1
+        num_corners_y = self.config.squares_y - 1
+        square_size = self.config.square_size
+
+        corners = []
+        for j in range(num_corners_y):
+            for i in range(num_corners_x):
+                x = (i + 1) * square_size
+                y = (j + 1) * square_size
+                corners.append([x, y, 0.0])
+
+        return np.array(corners, dtype=np.float32)
 
     def _init_legacy_detector(self):
         """Initialize legacy ArUco detector for older OpenCV versions."""
