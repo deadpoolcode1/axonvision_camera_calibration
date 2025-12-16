@@ -32,7 +32,7 @@ Origin: IMU center
 
 ### ChArUco Calibration Board
 
-- **Size:** 10x10 squares, 1.1m x 1.1m total
+- **Size:** 8x8 squares, 0.88m x 0.88m total
 - **Square size:** 11cm
 - **Marker size:** 8.5cm
 - **Dictionary:** ARUCO_6X6_250
