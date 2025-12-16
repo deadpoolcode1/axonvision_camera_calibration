@@ -46,6 +46,7 @@ import cv2
 import numpy as np
 import json
 import sys
+import time
 import argparse
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -1663,19 +1664,20 @@ class ExtrinsicCalibrationMenu:
 
         Returns:
             Captured image as numpy array, or None if cancelled/failed.
+
+        IMPORTANT: This method follows the same initialization pattern as the intrinsic
+        calibration to avoid segfaults. The order is critical:
+        1. Print instructions FIRST
+        2. Create GUI window BEFORE any ArUco/OpenCV detection code
+        3. Warm up camera stream with frames displayed in window
+        4. Initialize ArUco board/dict AFTER window is warmed up
+        5. Then run the main capture loop
         """
         if self.camera_source is None:
             print_status("Camera source not available", "error")
             return None
 
-        # Create board and dictionary for detection
-        # Use function-based API (cv2.aruco.detectMarkers) for compatibility with older OpenCV
-        board, aruco_dict = self.board_config.create_board()
-
-        # Get camera matrix and distortion for pose estimation preview
-        K = np.array(self.intrinsics["camera_matrix"])
-        dist = np.array(self.intrinsics["distortion_coefficients"])
-
+        # Print instructions BEFORE creating window (following intrinsic pattern)
         print()
         print("=" * 60)
         print("  CAMERA CAPTURE")
@@ -1696,8 +1698,8 @@ class ExtrinsicCalibrationMenu:
         window_name = "Extrinsic Calibration - Press SPACE to capture"
 
         # Check if DISPLAY environment variable is set (required for GUI on Linux)
-        display = os.environ.get('DISPLAY')
-        if not display:
+        display_env = os.environ.get('DISPLAY')
+        if not display_env:
             print_status("No DISPLAY environment variable set", "error")
             print("  Camera preview requires a graphical display.")
             print("  Either run on a system with a display, or use 'Load from file' option.")
@@ -1715,7 +1717,8 @@ class ExtrinsicCalibrationMenu:
         except Exception:
             pass  # Not critical if it fails
 
-        # Try to create window with error handling
+        # CRITICAL: Create window FIRST before any ArUco/frame processing
+        # This ensures proper GUI initialization before OpenCV detection code runs
         try:
             cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
             cv2.resizeWindow(window_name, 1280, 720)
@@ -1725,6 +1728,42 @@ class ExtrinsicCalibrationMenu:
             print("  This may be caused by display/GUI issues.")
             print("  Try running with X11 forwarding or on a local display.")
             return None
+
+        # CRITICAL: Warm up camera stream while showing frames in window
+        # This ensures GUI backend is fully initialized before ArUco detection
+        print_status("Warming up camera stream...", "info")
+        frame = None
+        for i in range(10):
+            frame = self.camera_source.get_image()
+            if frame is not None:
+                # Show warmup frame and pump event loop
+                warmup_display = frame.copy()
+                cv2.putText(warmup_display, f"Warming up... {i+1}/10",
+                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+                # Resize for display if needed
+                if warmup_display.shape[0] > 720:
+                    scale = 720 / warmup_display.shape[0]
+                    warmup_display = cv2.resize(warmup_display, None, fx=scale, fy=scale)
+                cv2.imshow(window_name, warmup_display)
+                cv2.waitKey(1)  # Critical: pump GUI event loop
+            time.sleep(0.1)
+
+        if frame is None:
+            print_status("Failed to get frames from camera", "error")
+            cv2.destroyAllWindows()
+            return None
+
+        print_status("Camera stream ready", "ok")
+
+        # CRITICAL: Create board and dictionary AFTER window is warmed up
+        # This prevents segfaults that occur when ArUco is initialized before GUI
+        print_status("Initializing ChArUco detector...", "info")
+        board, aruco_dict = self.board_config.create_board()
+        print_status("Detector ready", "ok")
+
+        # Get camera matrix and distortion for pose estimation preview
+        K = np.array(self.intrinsics["camera_matrix"])
+        dist = np.array(self.intrinsics["distortion_coefficients"])
 
         captured_image = None
         frame_count = 0
