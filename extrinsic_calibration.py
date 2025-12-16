@@ -84,8 +84,16 @@ class ChArUcoBoardConfig:
     
     def create_board(self):
         aruco_dict = cv2.aruco.getPredefinedDictionary(self.dictionary_id)
+
+        # Check OpenCV version for API compatibility
         # OpenCV 4.7+ uses CharucoBoard constructor, older versions use CharucoBoard_create
-        if hasattr(cv2.aruco, 'CharucoBoard'):
+        try:
+            cv_version = tuple(map(int, cv2.__version__.split('.')[:2]))
+        except (ValueError, AttributeError):
+            cv_version = (4, 0)  # Default to older API
+
+        if cv_version >= (4, 7):
+            # OpenCV 4.7+ API
             board = cv2.aruco.CharucoBoard(
                 (self.squares_x, self.squares_y),
                 self.square_size,
@@ -93,6 +101,7 @@ class ChArUcoBoardConfig:
                 aruco_dict
             )
         else:
+            # Older OpenCV API (4.6 and below)
             board = cv2.aruco.CharucoBoard_create(
                 self.squares_x,
                 self.squares_y,
