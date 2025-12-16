@@ -1284,7 +1284,13 @@ class ExtrinsicCalibrationMenu:
 
     DEFAULT_INTRINSICS_PATH = "camera_intrinsics.json"
 
-    def __init__(self):
+    def __init__(self, camera_source=None):
+        """Initialize extrinsic calibration menu.
+
+        Args:
+            camera_source: Optional camera source object with get_image() method
+                          for live camera capture. If None, only file loading is available.
+        """
         self.board_config = ChArUcoBoardConfig()
         self.calibration_config = CalibrationConfig()
         self.imu_config = IMUConfig()
@@ -1295,6 +1301,7 @@ class ExtrinsicCalibrationMenu:
         self.measurements_data = []  # Store raw measurement data for display
         self.camera_id = "camera_front"
         self.output_path = "camera_extrinsics.json"
+        self.camera_source = camera_source  # Camera source for live capture
 
     def run(self):
         """Run the interactive menu."""
@@ -1642,6 +1649,144 @@ class ExtrinsicCalibrationMenu:
 
         return True
 
+    def _capture_from_camera(self) -> Optional[np.ndarray]:
+        """Capture an image from the live camera stream with ChArUco detection preview.
+
+        Returns:
+            Captured image as numpy array, or None if cancelled/failed.
+        """
+        if self.camera_source is None:
+            print_status("Camera source not available", "error")
+            return None
+
+        # Create detector for preview
+        board, aruco_dict = self.board_config.create_board()
+        detector_params = cv2.aruco.DetectorParameters()
+        aruco_detector = cv2.aruco.ArucoDetector(aruco_dict, detector_params)
+
+        # Get camera matrix and distortion for pose estimation preview
+        K = np.array(self.intrinsics["camera_matrix"])
+        dist = np.array(self.intrinsics["distortion_coefficients"])
+
+        print()
+        print("=" * 60)
+        print("  CAMERA CAPTURE")
+        print("=" * 60)
+        print("  Position the ChArUco board in frame.")
+        print()
+        print("  Controls:")
+        print("    SPACE - Capture current frame (when board detected)")
+        print("    Q/ESC - Cancel")
+        print()
+        print("  Tips:")
+        print("    - Ensure the board is fully visible")
+        print("    - Wait for green 'READY' status before capturing")
+        print("    - Hold the board steady when pressing SPACE")
+        print("=" * 60)
+        print()
+
+        window_name = "Extrinsic Calibration - Press SPACE to capture"
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(window_name, 1280, 720)
+
+        # Pump the GUI event loop
+        cv2.waitKey(1)
+
+        captured_image = None
+        frame_count = 0
+        no_frame_count = 0
+
+        while True:
+            frame = self.camera_source.get_image()
+
+            if frame is None:
+                no_frame_count += 1
+                if no_frame_count > 50:  # ~5 seconds of no frames
+                    print_status("Lost connection to camera", "error")
+                    break
+                cv2.waitKey(100)
+                continue
+
+            no_frame_count = 0
+            frame_count += 1
+
+            # Create display copy
+            display = frame.copy()
+
+            # Detect ArUco markers
+            corners, ids, rejected = aruco_detector.detectMarkers(frame)
+
+            charuco_corners = None
+            charuco_ids = None
+            num_corners = 0
+
+            if ids is not None and len(ids) > 0:
+                # Draw detected markers
+                cv2.aruco.drawDetectedMarkers(display, corners, ids)
+
+                # Interpolate ChArUco corners
+                try:
+                    retval, charuco_corners, charuco_ids = cv2.aruco.interpolateCornersCharuco(
+                        corners, ids, frame, board
+                    )
+                    if retval > 0 and charuco_corners is not None:
+                        num_corners = len(charuco_corners)
+                        # Draw ChArUco corners
+                        cv2.aruco.drawDetectedCornersCharuco(display, charuco_corners, charuco_ids)
+                except Exception:
+                    pass
+
+            # Determine status
+            if num_corners >= 6:
+                status_text = f"READY - {num_corners} corners detected - Press SPACE to capture"
+                color = (0, 255, 0)  # Green
+            elif num_corners > 0:
+                status_text = f"Need more corners ({num_corners}/6+) - Adjust board position"
+                color = (0, 165, 255)  # Orange
+            else:
+                status_text = "No board detected - Show ChArUco board to camera"
+                color = (0, 0, 255)  # Red
+
+            # Draw overlay
+            overlay = display.copy()
+            cv2.rectangle(overlay, (5, 5), (750, 75), (0, 0, 0), -1)
+            cv2.addWeighted(overlay, 0.5, display, 0.5, 0, display)
+
+            cv2.putText(display, f"Extrinsic Calibration - Frame {frame_count}",
+                       (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+            cv2.putText(display, status_text,
+                       (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+
+            # Resize for display if needed
+            if display.shape[0] > 720:
+                scale = 720 / display.shape[0]
+                display = cv2.resize(display, None, fx=scale, fy=scale)
+
+            cv2.imshow(window_name, display)
+
+            key = cv2.waitKey(30) & 0xFF
+
+            if key == ord(' ') and num_corners >= 6:
+                # Capture the frame
+                captured_image = frame.copy()
+                print_status(f"Image captured with {num_corners} corners detected", "ok")
+
+                # Brief visual feedback - green border
+                feedback = display.copy()
+                cv2.rectangle(feedback, (0, 0), (feedback.shape[1], feedback.shape[0]), (0, 255, 0), 20)
+                cv2.imshow(window_name, feedback)
+                cv2.waitKey(300)
+                break
+
+            elif key in [ord('q'), ord('Q'), 27]:  # Q or ESC
+                print_status("Capture cancelled", "info")
+                break
+
+        cv2.destroyWindow(window_name)
+        cv2.waitKey(1)  # Pump event loop to ensure window closes
+
+        return captured_image
+
     def _add_measurement(self):
         """Add a calibration measurement."""
         print_subheader("Add Calibration Measurement")
@@ -1708,10 +1853,13 @@ class ExtrinsicCalibrationMenu:
         # Image
         print("\n  IMAGE:")
         print("    1. Load from file")
-        print("    2. Capture from camera (requires camera_streaming)")
+        if self.camera_source is not None:
+            print("    2. Capture from camera (live preview)")
+        else:
+            print("    2. Capture from camera (not available - run via camera_streaming.py)")
         print("    0. Cancel")
 
-        img_choice = input_string("Select option", "1")
+        img_choice = input_string("Select option", "2" if self.camera_source else "1")
 
         image = None
         image_path = None
@@ -1727,8 +1875,16 @@ class ExtrinsicCalibrationMenu:
                 print_status("Image file not found", "error")
                 return
         elif img_choice == '2':
-            print_status("Camera capture not yet integrated. Please use image file.", "warn")
-            return
+            if self.camera_source is None:
+                print_status("Camera capture not available.", "error")
+                print("  To use live camera capture, run extrinsic calibration via:")
+                print("    python3 camera_streaming.py extrinsic")
+                return
+            image = self._capture_from_camera()
+            if image is None:
+                print_status("No image captured", "warn")
+                return
+            image_path = "(live capture)"
         else:
             print_status("Measurement cancelled", "info")
             return

@@ -804,7 +804,7 @@ def run_calibration_stage_menu(config: CameraConfig):
 
 
 def run_extrinsic_calibration_mode(config: CameraConfig):
-    """Run extrinsic calibration menu."""
+    """Run extrinsic calibration menu with live camera support."""
     print_header("Extrinsic Camera Calibration")
 
     # Check if extrinsic_calibration module exists
@@ -822,9 +822,41 @@ def run_extrinsic_calibration_mode(config: CameraConfig):
         print("  You can still proceed, but will need to load intrinsics manually.")
         print()
 
-    # Run the extrinsic calibration menu
+    # Connect to camera for live capture support
+    print_status("Connecting to camera for live capture...", "info")
+    connectivity = CameraConnectivity(config)
+
+    ping_result = connectivity.ping_test()
+    if not ping_result.passed:
+        print_status(f"Camera not reachable: {ping_result.message}", "warn")
+        print("  Live camera capture will not be available.")
+        print("  You can still load images from files.")
+        print()
+        camera_source = None
+    else:
+        api_result = connectivity.api_health_check()
+        if not api_result.passed:
+            print_status(f"Camera API not available: {api_result.message}", "warn")
+            print("  Live camera capture will not be available.")
+            print("  You can still load images from files.")
+            print()
+            camera_source = None
+        else:
+            # Create and connect camera source
+            camera_source = NetworkCameraSource(config)
+            if not camera_source.connect():
+                print_status("Failed to connect to camera stream", "warn")
+                print("  Live camera capture will not be available.")
+                print("  You can still load images from files.")
+                print()
+                camera_source = None
+            else:
+                print_status("Camera connected - live capture enabled", "ok")
+                print()
+
+    # Run the extrinsic calibration menu with camera source
     try:
-        menu = ec.ExtrinsicCalibrationMenu()
+        menu = ec.ExtrinsicCalibrationMenu(camera_source=camera_source)
         menu.run()
         return 0
     except Exception as e:
@@ -832,6 +864,11 @@ def run_extrinsic_calibration_mode(config: CameraConfig):
         print_status(f"Extrinsic calibration error: {str(e)}", "error")
         traceback.print_exc()
         return 1
+    finally:
+        # Clean up camera connection
+        if camera_source is not None:
+            camera_source.release()
+            print_status("Camera connection closed", "info")
 
 
 def run_intrinsic_calibration_mode(config: CameraConfig):
