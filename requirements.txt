@@ -1,0 +1,21 @@
+# AxonVision Camera Calibration - Dependencies
+# Python 3.8+ required
+# Install with: pip install -r requirements.txt
+
+# Computer vision (includes ArUco/ChArUco detection)
+opencv-contrib-python==4.8.1.78
+
+# Numerical computing (numpy 2.0 has breaking changes)
+numpy>=1.21,<2
+
+# Scientific computing (optimization, spatial transforms)
+scipy>=1.7.0
+
+# HTTP client for network camera API
+requests>=2.25.0
+
+# PDF report generation (optional - for --generate-pdf)
+reportlab>=4.0.0
+
+# Serial communication for INS hardware (VectorNav)
+pyserial>=3.5
