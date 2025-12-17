@@ -34,7 +34,7 @@ Origin: IMU center
 
 - **Size:** 8x8 squares, 0.88m x 0.88m total
 - **Square size:** 11cm
-- **Marker size:** 8.5cm
+- **Marker size:** 7.5cm (75mm)
 - **Dictionary:** ARUCO_6X6_250
 - **Material:** RIGID (foam board, aluminum composite, or acrylic)
 
