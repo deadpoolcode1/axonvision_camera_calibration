@@ -604,6 +604,8 @@ The `test` command runs comprehensive diagnostics:
 # Step 1: Test connectivity first
 python3 camera_streaming.py test
 
+python3 camera_streaming.py --ip 10.1.13.37
+
 # Step 2: Run intrinsic calibration
 python3 intrinsic_calibration.py --network-camera -o camera_intrinsics.json
 
