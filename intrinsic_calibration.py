@@ -988,8 +988,8 @@ class CalibrationReportGenerator:
             ["Number of Images", str(calibration_result["num_images"])],
             ["RMS Error", f"{calibration_result['rms_error']:.4f} pixels"],
             ["Board Configuration", f"{board_config.squares_x}x{board_config.squares_y} squares"],
-            ["Square Size", f"{board_config.square_length*1000:.1f} mm"],
-            ["Marker Size", f"{board_config.marker_length*1000:.1f} mm"],
+            ["Square Size", f"{board_config.square_length*100:.1f} cm"],
+            ["Marker Size", f"{board_config.marker_length*100:.1f} cm"],
         ]
 
         summary_table = Table(summary_data, colWidths=[2*inch, 4*inch])
@@ -1119,8 +1119,8 @@ def run_calibration(image_source: ImageSource,
     print(f"Camera ID: {camera_id}")
     print(f"Target images: {num_images}")
     print(f"Board: {board_config.squares_x}x{board_config.squares_y} ChArUco, "
-          f"{board_config.square_length*100:.0f}cm squares, "
-          f"{board_config.marker_length*1000:.0f}mm markers")
+          f"{board_config.square_length*100:.1f}cm squares, "
+          f"{board_config.marker_length*100:.1f}cm markers")
 
     # Get dictionary name for display
     dict_name = "UNKNOWN"
@@ -1288,8 +1288,8 @@ Examples:
   # Save images during calibration for later replay
   python intrinsic_calibration.py --save-images --image-dir ./my_images
 
-  # Custom board configuration
-  python intrinsic_calibration.py --squares-x 8 --squares-y 8 --square-size 110 --marker-size 75 --dictionary DICT_6X6_250
+  # Custom board configuration (sizes in cm)
+  python intrinsic_calibration.py --squares-x 8 --squares-y 8 --square-size 11 --marker-size 7.5 --dictionary DICT_6X6_250
 """
     )
 
@@ -1405,14 +1405,14 @@ Examples:
     board_group.add_argument(
         "--square-size",
         type=float,
-        default=110,
-        help="Square size in millimeters (default: 110mm)"
+        default=11.0,
+        help="Square size in centimeters (default: 11cm)"
     )
     board_group.add_argument(
         "--marker-size",
         type=float,
-        default=75,
-        help="ArUco marker size in millimeters (default: 75mm)"
+        default=7.5,
+        help="ArUco marker size in centimeters (default: 7.5cm)"
     )
     board_group.add_argument(
         "--dictionary",
@@ -1433,12 +1433,12 @@ Examples:
     squares_x = args.board_squares_x if args.board_squares_x is not None else args.squares_x
     squares_y = args.board_squares_y if args.board_squares_y is not None else args.squares_y
     square_size_meters = (args.board_square_size if args.board_square_size is not None
-                          else args.square_size / 1000.0)  # Convert mm to meters
-    marker_size_meters = args.marker_size / 1000.0  # Convert mm to meters
+                          else args.square_size / 100.0)  # Convert cm to meters
+    marker_size_meters = args.marker_size / 100.0  # Convert cm to meters
 
     # Validate marker size vs square size
     if marker_size_meters >= square_size_meters:
-        print(f"Error: Marker size ({args.marker_size}mm) must be smaller than square size ({args.square_size}mm)")
+        print(f"Error: Marker size ({args.marker_size}cm) must be smaller than square size ({args.square_size}cm)")
         return 1
 
     # Get dictionary ID

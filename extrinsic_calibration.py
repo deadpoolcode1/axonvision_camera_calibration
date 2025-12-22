@@ -50,10 +50,46 @@ import time
 import argparse
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, Tuple, List, Dict
+from pathlib import Path
+from typing import Optional, Tuple, List, Dict, Any
 from scipy.spatial.transform import Rotation
 from scipy.optimize import least_squares
 import warnings
+
+# PDF generation imports
+try:
+    from reportlab.lib.pagesizes import letter, A4
+    from reportlab.lib.units import inch
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as RLImage, Table, TableStyle, PageBreak
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER
+    import io
+    HAS_REPORTLAB = True
+except ImportError:
+    HAS_REPORTLAB = False
+    inch = 72  # Fallback: 1 inch = 72 points
+    RLImage = None
+
+# Supported ArUco dictionaries with their names
+ARUCO_DICTIONARIES = {
+    "DICT_4X4_50": cv2.aruco.DICT_4X4_50,
+    "DICT_4X4_100": cv2.aruco.DICT_4X4_100,
+    "DICT_4X4_250": cv2.aruco.DICT_4X4_250,
+    "DICT_4X4_1000": cv2.aruco.DICT_4X4_1000,
+    "DICT_5X5_50": cv2.aruco.DICT_5X5_50,
+    "DICT_5X5_100": cv2.aruco.DICT_5X5_100,
+    "DICT_5X5_250": cv2.aruco.DICT_5X5_250,
+    "DICT_5X5_1000": cv2.aruco.DICT_5X5_1000,
+    "DICT_6X6_50": cv2.aruco.DICT_6X6_50,
+    "DICT_6X6_100": cv2.aruco.DICT_6X6_100,
+    "DICT_6X6_250": cv2.aruco.DICT_6X6_250,
+    "DICT_6X6_1000": cv2.aruco.DICT_6X6_1000,
+    "DICT_7X7_50": cv2.aruco.DICT_7X7_50,
+    "DICT_7X7_100": cv2.aruco.DICT_7X7_100,
+    "DICT_7X7_250": cv2.aruco.DICT_7X7_250,
+    "DICT_7X7_1000": cv2.aruco.DICT_7X7_1000,
+}
 
 # INS serial reader (optional, for real INS hardware)
 try:
@@ -1002,10 +1038,212 @@ class SyntheticTest:
 
 
 # =============================================================================
+# PDF REPORT GENERATOR
+# =============================================================================
+
+class ExtrinsicCalibrationReportGenerator:
+    """Generates PDF reports for extrinsic camera calibration results."""
+
+    def __init__(self, output_path: str):
+        if not HAS_REPORTLAB:
+            raise RuntimeError("reportlab is required for PDF generation. Install with: pip install reportlab")
+        self.output_path = output_path
+        self.images_data: List[Dict[str, Any]] = []
+        self.styles = getSampleStyleSheet()
+
+        # Custom styles
+        self.title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=self.styles['Heading1'],
+            fontSize=18,
+            spaceAfter=30,
+            alignment=TA_CENTER
+        )
+        self.heading_style = ParagraphStyle(
+            'CustomHeading',
+            parent=self.styles['Heading2'],
+            fontSize=14,
+            spaceAfter=12
+        )
+
+    def add_image(self, image: np.ndarray, image_name: str, num_corners: int,
+                  reprojection_error: Optional[float] = None,
+                  ins_data: Optional['INSData'] = None,
+                  board_rtk: Optional['RTKMeasurement'] = None):
+        """Add an image with detection info for the report."""
+        self.images_data.append({
+            'image': image.copy(),
+            'name': image_name,
+            'num_corners': num_corners,
+            'reprojection_error': reprojection_error,
+            'ins_data': ins_data,
+            'board_rtk': board_rtk
+        })
+
+    def _image_to_reportlab(self, cv_image: np.ndarray, max_width: float = 5*inch,
+                            max_height: float = 3.5*inch) -> RLImage:
+        """Convert OpenCV image to ReportLab Image object."""
+        # Convert BGR to RGB
+        rgb_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB)
+
+        # Resize if needed to fit page
+        h, w = rgb_image.shape[:2]
+        scale_w = max_width / w
+        scale_h = max_height / h
+        scale = min(scale_w, scale_h, 1.0)
+
+        if scale < 1.0:
+            new_w = int(w * scale)
+            new_h = int(h * scale)
+            rgb_image = cv2.resize(rgb_image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+        # Encode to PNG bytes
+        success, buffer = cv2.imencode('.png', cv2.cvtColor(rgb_image, cv2.COLOR_RGB2BGR))
+        if not success:
+            raise RuntimeError("Failed to encode image")
+
+        # Create ReportLab Image
+        img_buffer = io.BytesIO(buffer.tobytes())
+        return RLImage(img_buffer, width=rgb_image.shape[1], height=rgb_image.shape[0])
+
+    def generate_report(self, calibration_result: dict, board_config: 'ChArUcoBoardConfig'):
+        """Generate the PDF report."""
+        doc = SimpleDocTemplate(
+            self.output_path,
+            pagesize=letter,
+            rightMargin=0.5*inch,
+            leftMargin=0.5*inch,
+            topMargin=0.5*inch,
+            bottomMargin=0.5*inch
+        )
+
+        story = []
+
+        # Title
+        story.append(Paragraph("Extrinsic Camera Calibration Report", self.title_style))
+        story.append(Spacer(1, 12))
+
+        # Summary section
+        story.append(Paragraph("Calibration Summary", self.heading_style))
+
+        t = np.array(calibration_result["imu_to_camera_transform"]["translation_vector"])
+        angles = calibration_result["imu_to_camera_transform"]["euler_angles"]
+        q = calibration_result["quality_metrics"]
+
+        summary_data = [
+            ["Camera ID", calibration_result.get("camera_id", "camera_front")],
+            ["Calibration Date", calibration_result.get("timestamp", "N/A")],
+            ["Number of Measurements", str(q["num_measurements"])],
+            ["Optimization Converged", "Yes" if q["optimization_converged"] else "No"],
+            ["Mean Reproj Error", f"{q['mean_reproj_error_px']:.4f} pixels"],
+            ["Max Reproj Error", f"{q['max_reproj_error_px']:.4f} pixels"],
+            ["Board Configuration", f"{board_config.squares_x}x{board_config.squares_y} squares"],
+            ["Square Size", f"{board_config.square_size*100:.1f} cm"],
+            ["Marker Size", f"{board_config.marker_size*100:.1f} cm"],
+        ]
+
+        summary_table = Table(summary_data, colWidths=[2*inch, 4*inch])
+        summary_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (0, -1), colors.lightgrey),
+            ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('TOPPADDING', (0, 0), (-1, -1), 6),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ]))
+        story.append(summary_table)
+        story.append(Spacer(1, 20))
+
+        # Camera Transform section
+        story.append(Paragraph("IMU-to-Camera Transform", self.heading_style))
+        transform_data = [
+            ["Parameter", "Value"],
+            ["Position X (Forward)", f"{t[0]*100:+.2f} cm"],
+            ["Position Y (Right)", f"{t[1]*100:+.2f} cm"],
+            ["Position Z (Down)", f"{t[2]*100:+.2f} cm"],
+            ["Azimuth", f"{angles['azimuth']:+.2f}°"],
+            ["Elevation", f"{angles['elevation']:+.2f}°"],
+            ["Roll", f"{angles['roll']:+.2f}°"],
+        ]
+
+        transform_table = Table(transform_data, colWidths=[2.5*inch, 3*inch])
+        transform_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('TOPPADDING', (0, 0), (-1, -1), 6),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ]))
+        story.append(transform_table)
+        story.append(Spacer(1, 20))
+
+        # Per-image errors table
+        if self.images_data:
+            story.append(Paragraph("Per-Measurement Details", self.heading_style))
+            errors_data = [["#", "Corners", "Reproj Error (px)", "INS YPR"]]
+
+            for i, img_data in enumerate(self.images_data):
+                error_str = f"{img_data['reprojection_error']:.4f}" if img_data['reprojection_error'] else "N/A"
+                ins_str = ""
+                if img_data.get('ins_data'):
+                    ins = img_data['ins_data']
+                    ins_str = f"{ins.yaw:.1f}/{ins.pitch:.1f}/{ins.roll:.1f}"
+                errors_data.append([
+                    str(i + 1),
+                    str(img_data['num_corners']),
+                    error_str,
+                    ins_str
+                ])
+
+            errors_table = Table(errors_data, colWidths=[0.5*inch, 1*inch, 1.5*inch, 2*inch])
+            errors_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 9),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+                ('TOPPADDING', (0, 0), (-1, -1), 4),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ]))
+            story.append(errors_table)
+            story.append(PageBreak())
+
+            # Individual image pages
+            story.append(Paragraph("Calibration Images with Detections", self.heading_style))
+            story.append(Spacer(1, 12))
+
+            for i, img_data in enumerate(self.images_data):
+                # Image title
+                error_str = f"{img_data['reprojection_error']:.4f} px" if img_data['reprojection_error'] else "N/A"
+                img_title = f"Image {i+1}: {img_data['name']} - {img_data['num_corners']} corners, Error: {error_str}"
+                story.append(Paragraph(img_title, self.styles['Normal']))
+                story.append(Spacer(1, 6))
+
+                # Add image
+                rl_image = self._image_to_reportlab(img_data['image'])
+                story.append(rl_image)
+                story.append(Spacer(1, 20))
+
+                # Page break every 2 images (except last)
+                if (i + 1) % 2 == 0 and i < len(self.images_data) - 1:
+                    story.append(PageBreak())
+
+        # Build PDF
+        doc.build(story)
+        print(f"\nPDF report saved to: {self.output_path}")
+
+
+# =============================================================================
 # DEMO
 # =============================================================================
 
-def run_demo(num_measurements: int = 5, intrinsics_path: str = None, 
+def run_demo(num_measurements: int = 5, intrinsics_path: str = None,
              output_path: str = "camera_extrinsics.json"):
     """Demo showing IMU-to-camera calibration with dual RTK and bundle adjustment.
     
@@ -1043,7 +1281,7 @@ def run_demo(num_measurements: int = 5, intrinsics_path: str = None,
     print("\nVehicle positioned and INS initialized.")
     print(f"  INS reports vehicle heading: {ins_euler['yaw']:.1f}° (NED yaw)")
     print(f"  INS reports pitch: {ins_euler['pitch']:.1f}°, roll: {ins_euler['roll']:.1f}°")
-    print(f"  Vehicle RTK antenna height: {abs(imu_position_world[2]):.2f}m above ground")
+    print(f"  Vehicle RTK antenna height: {abs(imu_position_world[2])*100:.1f}cm above ground")
     
     np.random.seed(42)
     
@@ -1094,7 +1332,7 @@ def run_demo(num_measurements: int = 5, intrinsics_path: str = None,
     print(f"\nChArUco board specifications:")
     print(f"  Size: {board_config.squares_x}x{board_config.squares_y} squares")
     print(f"  Square size: {board_config.square_size*100:.0f}cm")
-    print(f"  Total dimensions: {board_config.board_width:.2f}m x {board_config.board_height:.2f}m")
+    print(f"  Total dimensions: {board_config.board_width*100:.1f}cm x {board_config.board_height*100:.1f}cm")
     
     calibrator = ExtrinsicCalibrator(board_config, intrinsics, "camera_front")
     calibrator.set_prior(prior)
@@ -1130,12 +1368,12 @@ def run_demo(num_measurements: int = 5, intrinsics_path: str = None,
         
         print(f"\n  Position {i+1}:")
         if data.get("board_rtk"):
-            rtk_pos = data["board_rtk"].position_world
-            print(f"    Board RTK reading: N={rtk_pos[0]:.3f}m, E={rtk_pos[1]:.3f}m, D={rtk_pos[2]:.3f}m")
+            rtk_pos = data["board_rtk"].position_world * 100  # Convert to cm
+            print(f"    Board RTK reading: N={rtk_pos[0]:.1f}cm, E={rtk_pos[1]:.1f}cm, D={rtk_pos[2]:.1f}cm")
         if data.get("vehicle_rtk"):
-            veh_rtk = data["vehicle_rtk"].position_world
-            print(f"    Vehicle RTK reading: N={veh_rtk[0]:.3f}m, E={veh_rtk[1]:.3f}m, D={veh_rtk[2]:.3f}m")
-        print(f"    Board distance: ~{dist:.1f}m, lateral offset: {lateral:+.1f}m, height offset: {height_offset:+.2f}m")
+            veh_rtk = data["vehicle_rtk"].position_world * 100  # Convert to cm
+            print(f"    Vehicle RTK reading: N={veh_rtk[0]:.1f}cm, E={veh_rtk[1]:.1f}cm, D={veh_rtk[2]:.1f}cm")
+        print(f"    Board distance: ~{dist*100:.0f}cm, lateral offset: {lateral*100:+.0f}cm, height offset: {height_offset*100:+.0f}cm")
         
         if image is not None:
             result = calibrator.add_measurement(
@@ -1280,18 +1518,22 @@ def input_string(prompt: str, default: str = None) -> Optional[str]:
         return default
 
 
-def input_vector3(prompt: str, defaults: List[float] = None) -> Optional[np.ndarray]:
-    """Get 3D vector input from user."""
+def input_vector3(prompt: str, defaults: List[float] = None, unit: str = "cm") -> Optional[np.ndarray]:
+    """Get 3D vector input from user. Input is in specified unit, returned in meters."""
     print(f"\n  {prompt}")
     if defaults is None:
         defaults = [0.0, 0.0, 0.0]
 
-    x = input_float("X (meters)", defaults[0])
-    y = input_float("Y (meters)", defaults[1])
-    z = input_float("Z (meters)", defaults[2])
+    x = input_float(f"X ({unit})", defaults[0])
+    y = input_float(f"Y ({unit})", defaults[1])
+    z = input_float(f"Z ({unit})", defaults[2])
 
     if x is None or y is None or z is None:
         return None
+
+    # Convert to meters
+    if unit == "cm":
+        return np.array([x / 100.0, y / 100.0, z / 100.0])
     return np.array([x, y, z])
 
 
@@ -1311,8 +1553,10 @@ class ExtrinsicCalibrationMenu:
     """Interactive menu for extrinsic calibration."""
 
     DEFAULT_INTRINSICS_PATH = "camera_intrinsics.json"
+    DEFAULT_IMAGES_DIR = "extrinsic_calibration_images"
 
-    def __init__(self, camera_source=None, ins_reader=None):
+    def __init__(self, camera_source=None, ins_reader=None, board_config=None,
+                 save_images: bool = True, image_dir: str = None):
         """Initialize extrinsic calibration menu.
 
         Args:
@@ -1320,8 +1564,11 @@ class ExtrinsicCalibrationMenu:
                           for live camera capture. If None, only file loading is available.
             ins_reader: Optional INS reader object with get_latest() method
                        for real-time INS data. If None, manual entry is used.
+            board_config: Optional ChArUcoBoardConfig. Uses defaults if None.
+            save_images: Whether to automatically save images during calibration.
+            image_dir: Directory to save calibration images.
         """
-        self.board_config = ChArUcoBoardConfig()
+        self.board_config = board_config or ChArUcoBoardConfig()
         self.calibration_config = CalibrationConfig()
         self.imu_config = IMUConfig()
         self.intrinsics = None
@@ -1331,8 +1578,12 @@ class ExtrinsicCalibrationMenu:
         self.measurements_data = []  # Store raw measurement data for display
         self.camera_id = "camera_front"
         self.output_path = "camera_extrinsics.json"
+        self.pdf_output_path = "camera_extrinsics_report.pdf"
         self.camera_source = camera_source  # Camera source for live capture
         self.ins_reader = ins_reader  # INS reader for real-time attitude data
+        self.save_images = save_images
+        self.image_dir = image_dir or self.DEFAULT_IMAGES_DIR
+        self.annotated_images = []  # Store annotated images for PDF report
 
     def run(self):
         """Run the interactive menu."""
@@ -1370,6 +1621,12 @@ class ExtrinsicCalibrationMenu:
                 self._view_results()
             elif choice == '9':
                 self._configure_weights()
+            elif choice == 's':
+                self._save_measurements_to_dir()
+            elif choice == 'l':
+                self._load_measurements_from_dir()
+            elif choice == 'p':
+                self._generate_pdf_report()
             elif choice == 'd':
                 self._run_demo_data()
             elif choice == '0':
@@ -1426,6 +1683,11 @@ class ExtrinsicCalibrationMenu:
         print(f"  8. View/Save Results")
         print(f"  9. Configure Optimization Weights")
 
+        print(f"\n  Data Management:")
+        print(f"  s. Save Measurements to Directory")
+        print(f"  l. Load Measurements from Directory (debug mode)")
+        print(f"  p. Generate PDF Report")
+
         print(f"\n  Other:")
         print(f"  d. Load Demo Data (synthetic)")
         print(f"  0. Exit")
@@ -1450,7 +1712,7 @@ class ExtrinsicCalibrationMenu:
         print(f"    Squares Y: {self.board_config.squares_y}")
         print(f"    Square size: {self.board_config.square_size*100:.1f} cm")
         print(f"    Marker size: {self.board_config.marker_size*100:.1f} cm")
-        print(f"    Board dimensions: {self.board_config.board_width:.2f}m x {self.board_config.board_height:.2f}m")
+        print(f"    Board dimensions: {self.board_config.board_width*100:.1f}cm x {self.board_config.board_height*100:.1f}cm")
 
         if not input_yes_no("Modify settings?", False):
             return
@@ -1476,13 +1738,16 @@ class ExtrinsicCalibrationMenu:
         # RTK antenna offset on board
         print("\n  RTK Antenna Offset on Board (from board origin):")
         print("    Board origin is at top-left corner")
-        print("    X = right, Y = down, Z = out of board")
+        print("    X = right, Y = down, Z = out of board (in cm)")
+        cur_offset = self.board_config.rtk_antenna_offset_board * 100  # Display in cm
+        print(f"    Current offset: [{cur_offset[0]:.1f}, {cur_offset[1]:.1f}, {cur_offset[2]:.1f}] cm")
 
         if input_yes_no("Configure RTK antenna offset on board?", False):
-            offset = input_vector3("RTK antenna offset on board",
-                                   self.board_config.rtk_antenna_offset_board.tolist())
+            # Pass defaults in cm
+            offset = input_vector3("RTK antenna offset on board (in cm)",
+                                   (self.board_config.rtk_antenna_offset_board * 100).tolist(), unit="cm")
             if offset is not None:
-                self.board_config.rtk_antenna_offset_board = offset
+                self.board_config.rtk_antenna_offset_board = offset  # input_vector3 returns meters
                 print_status("RTK antenna offset updated", "ok")
 
     def _load_intrinsics(self):
@@ -1982,34 +2247,34 @@ class ExtrinsicCalibrationMenu:
         # Board RTK
         print("\n  BOARD RTK POSITION (world frame - NED):")
         print("    Enter RTK reading from antenna on/near the ChArUco board")
-        print("    North-East-Down coordinates relative to origin")
+        print("    North-East-Down coordinates relative to origin (in cm)")
 
-        board_n = input_float("North (meters)")
-        board_e = input_float("East (meters)")
-        board_d = input_float("Down (meters, negative = above ground)")
-        board_std = input_float("RTK std dev (meters)", 0.02)
+        board_n = input_float("North (cm)")
+        board_e = input_float("East (cm)")
+        board_d = input_float("Down (cm, negative = above ground)")
+        board_std = input_float("RTK std dev (cm)", 2.0)
 
         board_rtk = None
         if all(v is not None for v in [board_n, board_e, board_d]):
             board_rtk = RTKMeasurement(
-                position_world=np.array([board_n, board_e, board_d]),
-                std=board_std
+                position_world=np.array([board_n / 100.0, board_e / 100.0, board_d / 100.0]),
+                std=board_std / 100.0 if board_std else 0.02
             )
 
         # Vehicle RTK
         print("\n  VEHICLE RTK POSITION (world frame - NED):")
-        print("    Enter RTK reading from antenna on the vehicle/IMU")
+        print("    Enter RTK reading from antenna on the vehicle/IMU (in cm)")
 
-        veh_n = input_float("North (meters)")
-        veh_e = input_float("East (meters)")
-        veh_d = input_float("Down (meters)")
-        veh_std = input_float("RTK std dev (meters)", 0.02)
+        veh_n = input_float("North (cm)")
+        veh_e = input_float("East (cm)")
+        veh_d = input_float("Down (cm)")
+        veh_std = input_float("RTK std dev (cm)", 2.0)
 
         vehicle_rtk = None
         if all(v is not None for v in [veh_n, veh_e, veh_d]):
             vehicle_rtk = RTKMeasurement(
-                position_world=np.array([veh_n, veh_e, veh_d]),
-                std=veh_std
+                position_world=np.array([veh_n / 100.0, veh_e / 100.0, veh_d / 100.0]),
+                std=veh_std / 100.0 if veh_std else 0.02
             )
 
         # Image
@@ -2070,7 +2335,7 @@ class ExtrinsicCalibrationMenu:
             print_status(f"Measurement added successfully", "ok")
             print(f"    Corners detected: {result['corners_detected']}")
             print(f"    PnP reprojection error: {result['reproj_error']:.3f} pixels")
-            print(f"    Board distance (PnP): {result['pnp_distance']:.2f} m")
+            print(f"    Board distance (PnP): {result['pnp_distance']*100:.1f} cm")
         else:
             print_status(f"Failed to add measurement: {result['error']}", "error")
 
@@ -2091,12 +2356,12 @@ class ExtrinsicCalibrationMenu:
             print(f"      INS: yaw={ins.yaw:.1f}°, pitch={ins.pitch:.1f}°, roll={ins.roll:.1f}°")
 
             if mdata.get('board_rtk'):
-                rtk = mdata['board_rtk'].position_world
-                print(f"      Board RTK: N={rtk[0]:.3f}, E={rtk[1]:.3f}, D={rtk[2]:.3f}")
+                rtk = mdata['board_rtk'].position_world * 100  # Convert to cm
+                print(f"      Board RTK: N={rtk[0]:.1f}cm, E={rtk[1]:.1f}cm, D={rtk[2]:.1f}cm")
 
             if mdata.get('vehicle_rtk'):
-                rtk = mdata['vehicle_rtk'].position_world
-                print(f"      Vehicle RTK: N={rtk[0]:.3f}, E={rtk[1]:.3f}, D={rtk[2]:.3f}")
+                rtk = mdata['vehicle_rtk'].position_world * 100  # Convert to cm
+                print(f"      Vehicle RTK: N={rtk[0]:.1f}cm, E={rtk[1]:.1f}cm, D={rtk[2]:.1f}cm")
 
             if mdata.get('image_path'):
                 print(f"      Image: {mdata['image_path']}")
@@ -2358,14 +2623,284 @@ class ExtrinsicCalibrationMenu:
         print(f"    Camera position: [{true_camera_to_imu[0]*100:.1f}, {true_camera_to_imu[1]*100:.1f}, {true_camera_to_imu[2]*100:.1f}] cm")
         print(f"    Camera angles: az={true_camera_angles['azimuth']:.1f}°, el={true_camera_angles['elevation']:.1f}°")
 
+    def _save_measurements_to_dir(self):
+        """Save measurements and images to directory for later replay."""
+        print_subheader("Save Measurements to Directory")
 
-def interactive_menu():
+        if not self.measurements_data:
+            print_status("No measurements to save", "warn")
+            return
+
+        save_dir = input_string("Save directory", self.image_dir)
+        if not save_dir:
+            return
+
+        save_path = Path(save_dir)
+        save_path.mkdir(parents=True, exist_ok=True)
+
+        # Get dictionary name for metadata
+        dict_name = "UNKNOWN"
+        for name, did in ARUCO_DICTIONARIES.items():
+            if did == self.board_config.dictionary_id:
+                dict_name = name
+                break
+
+        # Build metadata
+        metadata = {
+            "board_config": {
+                "squares_x": self.board_config.squares_x,
+                "squares_y": self.board_config.squares_y,
+                "square_size_cm": self.board_config.square_size * 100,
+                "marker_size_cm": self.board_config.marker_size * 100,
+                "dictionary_id": self.board_config.dictionary_id,
+                "dictionary_name": dict_name
+            },
+            "camera_id": self.camera_id,
+            "capture_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "intrinsics": self.intrinsics,
+            "camera_prior": None,
+            "measurements": []
+        }
+
+        # Save camera prior if set
+        if self.camera_prior:
+            metadata["camera_prior"] = {
+                "position_cm": (self.camera_prior.position * 100).tolist(),
+                "position_std_cm": (self.camera_prior.position_std * 100).tolist(),
+                "azimuth": self.camera_prior.azimuth,
+                "elevation": self.camera_prior.elevation,
+                "roll": self.camera_prior.roll,
+                "orientation_std_deg": self.camera_prior.orientation_std_deg
+            }
+
+        # Save each measurement
+        for i, mdata in enumerate(self.measurements_data):
+            meas_num = i + 1
+            image_filename = f"measurement_{meas_num:02d}.png"
+
+            # Save image
+            if mdata.get('image') is not None:
+                cv2.imwrite(str(save_path / image_filename), mdata['image'])
+
+            # Save annotated image if available
+            if mdata.get('annotated_image') is not None:
+                annotated_filename = f"annotated_{meas_num:02d}.png"
+                cv2.imwrite(str(save_path / annotated_filename), mdata['annotated_image'])
+
+            # Build measurement metadata
+            meas_meta = {
+                "index": meas_num,
+                "image_file": image_filename,
+                "ins_data": {
+                    "yaw": mdata['ins_data'].yaw,
+                    "pitch": mdata['ins_data'].pitch,
+                    "roll": mdata['ins_data'].roll
+                },
+                "board_rtk": None,
+                "vehicle_rtk": None,
+                "result": mdata.get('result', {})
+            }
+
+            if mdata.get('board_rtk'):
+                meas_meta["board_rtk"] = {
+                    "position": mdata['board_rtk'].position_world.tolist(),
+                    "std": mdata['board_rtk'].std
+                }
+
+            if mdata.get('vehicle_rtk'):
+                meas_meta["vehicle_rtk"] = {
+                    "position": mdata['vehicle_rtk'].position_world.tolist(),
+                    "std": mdata['vehicle_rtk'].std
+                }
+
+            metadata["measurements"].append(meas_meta)
+
+        # Save metadata JSON
+        metadata_path = save_path / "extrinsic_calibration_metadata.json"
+        with open(metadata_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+
+        print_status(f"Saved {len(self.measurements_data)} measurements to {save_dir}", "ok")
+        print(f"    Images: {len(self.measurements_data)} files")
+        print(f"    Metadata: extrinsic_calibration_metadata.json")
+
+    def _load_measurements_from_dir(self):
+        """Load measurements from a saved directory (debug/replay mode)."""
+        print_subheader("Load Measurements from Directory")
+
+        load_dir = input_string("Directory path", self.image_dir)
+        if not load_dir:
+            return
+
+        load_path = Path(load_dir)
+        metadata_path = load_path / "extrinsic_calibration_metadata.json"
+
+        if not metadata_path.exists():
+            print_status(f"Metadata file not found: {metadata_path}", "error")
+            return
+
+        try:
+            with open(metadata_path) as f:
+                metadata = json.load(f)
+        except Exception as e:
+            print_status(f"Failed to load metadata: {e}", "error")
+            return
+
+        # Confirm before replacing existing measurements
+        if self.measurements_data:
+            print_status(f"This will replace {len(self.measurements_data)} existing measurements", "warn")
+            if not input_yes_no("Continue?", False):
+                return
+
+        # Load board config
+        board_cfg = metadata.get("board_config", {})
+        self.board_config = ChArUcoBoardConfig(
+            squares_x=board_cfg.get("squares_x", 8),
+            squares_y=board_cfg.get("squares_y", 8),
+            square_size=board_cfg.get("square_size_cm", 11) / 100.0,
+            marker_size=board_cfg.get("marker_size_cm", 7.5) / 100.0,
+            dictionary_id=board_cfg.get("dictionary_id", cv2.aruco.DICT_6X6_250)
+        )
+
+        # Load intrinsics
+        if metadata.get("intrinsics"):
+            self.intrinsics = metadata["intrinsics"]
+            print_status("Loaded intrinsics from metadata", "ok")
+
+        # Load camera prior
+        if metadata.get("camera_prior"):
+            prior = metadata["camera_prior"]
+            self.camera_prior = CameraPrior(
+                position=np.array(prior["position_cm"]) / 100.0,
+                position_std=np.array(prior["position_std_cm"]) / 100.0,
+                azimuth=prior.get("azimuth"),
+                elevation=prior.get("elevation"),
+                roll=prior.get("roll"),
+                orientation_std_deg=prior.get("orientation_std_deg", 5.0)
+            )
+            print_status("Loaded camera prior from metadata", "ok")
+
+        # Initialize calibrator
+        if self.intrinsics:
+            self._init_calibrator()
+
+        # Load measurements
+        self.measurements_data = []
+        self.annotated_images = []
+
+        for meas_meta in metadata.get("measurements", []):
+            image_file = load_path / meas_meta["image_file"]
+
+            if not image_file.exists():
+                print_status(f"Image not found: {meas_meta['image_file']}", "warn")
+                continue
+
+            image = cv2.imread(str(image_file))
+            if image is None:
+                print_status(f"Failed to load: {meas_meta['image_file']}", "warn")
+                continue
+
+            # Reconstruct INS data
+            ins_meta = meas_meta.get("ins_data", {})
+            ins_data = INSData(
+                yaw=ins_meta.get("yaw", 0),
+                pitch=ins_meta.get("pitch", 0),
+                roll=ins_meta.get("roll", 0)
+            )
+
+            # Reconstruct RTK measurements
+            board_rtk = None
+            if meas_meta.get("board_rtk"):
+                rtk = meas_meta["board_rtk"]
+                board_rtk = RTKMeasurement(
+                    position_world=np.array(rtk["position"]),
+                    std=rtk.get("std", 0.02)
+                )
+
+            vehicle_rtk = None
+            if meas_meta.get("vehicle_rtk"):
+                rtk = meas_meta["vehicle_rtk"]
+                vehicle_rtk = RTKMeasurement(
+                    position_world=np.array(rtk["position"]),
+                    std=rtk.get("std", 0.02)
+                )
+
+            # Add to calibrator
+            if self.calibrator:
+                result = self.calibrator.add_measurement(image, ins_data, board_rtk, vehicle_rtk)
+            else:
+                result = meas_meta.get("result", {"success": True, "corners_detected": 0})
+
+            if result.get("success", True):
+                self.measurements_data.append({
+                    'ins_data': ins_data,
+                    'board_rtk': board_rtk,
+                    'vehicle_rtk': vehicle_rtk,
+                    'image': image,
+                    'image_path': meas_meta["image_file"],
+                    'result': result
+                })
+                print(f"    Loaded measurement {meas_meta['index']}: {result.get('corners_detected', '?')} corners")
+
+        print_status(f"Loaded {len(self.measurements_data)} measurements from {load_dir}", "ok")
+
+    def _generate_pdf_report(self):
+        """Generate PDF report with calibration results and images."""
+        print_subheader("Generate PDF Report")
+
+        if not HAS_REPORTLAB:
+            print_status("reportlab not installed. Install with: pip install reportlab", "error")
+            return
+
+        if not self.calibrator or not self.calibrator.result:
+            print_status("No calibration results available. Run calibration first.", "warn")
+            return
+
+        pdf_path = input_string("PDF output path", self.pdf_output_path)
+        if not pdf_path:
+            return
+
+        try:
+            report = ExtrinsicCalibrationReportGenerator(pdf_path)
+
+            # Add images with detection info
+            for i, mdata in enumerate(self.measurements_data):
+                # Get annotated image if available, otherwise use raw image
+                image = mdata.get('annotated_image', mdata.get('image'))
+                if image is None:
+                    continue
+
+                result = mdata.get('result', {})
+                report.add_image(
+                    image=image,
+                    image_name=mdata.get('image_path', f"measurement_{i+1}"),
+                    num_corners=result.get('corners_detected', 0),
+                    reprojection_error=result.get('reproj_error'),
+                    ins_data=mdata.get('ins_data'),
+                    board_rtk=mdata.get('board_rtk')
+                )
+
+            report.generate_report(self.calibrator.result, self.board_config)
+            print_status(f"PDF report saved to: {pdf_path}", "ok")
+
+        except Exception as e:
+            print_status(f"Failed to generate PDF: {e}", "error")
+
+
+def interactive_menu(board_config=None, save_images=True, image_dir=None):
     """Run the interactive calibration menu."""
-    menu = ExtrinsicCalibrationMenu()
+    menu = ExtrinsicCalibrationMenu(
+        board_config=board_config,
+        save_images=save_images,
+        image_dir=image_dir
+    )
     menu.run()
 
 
 def main():
+    # Build dictionary choices string for help text
+    dict_choices = list(ARUCO_DICTIONARIES.keys())
+
     parser = argparse.ArgumentParser(
         description="Extrinsic Camera Calibration - Dual RTK + Bundle Adjustment",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -2375,6 +2910,12 @@ Examples:
   python3 extrinsic_calibration.py menu           # Interactive menu (explicit)
   python3 extrinsic_calibration.py --demo         # Run demo with synthetic data
   python3 extrinsic_calibration.py --demo -n 8    # Demo with 8 measurements
+
+  # Load from saved measurements directory (debug mode)
+  python3 extrinsic_calibration.py --from-directory ./extrinsic_calibration_images
+
+  # Custom board configuration (sizes in cm)
+  python3 extrinsic_calibration.py --squares-x 8 --squares-y 8 --square-size 11 --marker-size 7.5
         """
     )
 
@@ -2385,17 +2926,123 @@ Examples:
         default='menu',
         help='Command to run (default: menu)'
     )
+
+    # Demo options
     parser.add_argument("--demo", action="store_true", help="Run demo with synthetic data")
+    parser.add_argument("--num", "-n", type=int, default=5, help="Number of board positions for demo")
+
+    # Input/Output options
     parser.add_argument("--intrinsics", "-i", help="Path to intrinsics JSON file")
     parser.add_argument("--output", "-o", default="camera_extrinsics.json", help="Output JSON file")
-    parser.add_argument("--num", "-n", type=int, default=5, help="Number of board positions for demo")
+    parser.add_argument(
+        "--from-directory",
+        type=str,
+        metavar="DIR",
+        help="Load measurements from directory (debug/replay mode)"
+    )
+
+    # Image saving options
+    parser.add_argument(
+        "--save-images",
+        action="store_true",
+        default=True,
+        help="Save captured images for later replay (default: enabled)"
+    )
+    parser.add_argument(
+        "--image-dir",
+        default="extrinsic_calibration_images",
+        help="Directory to save calibration images (default: extrinsic_calibration_images)"
+    )
+
+    # PDF report options
+    parser.add_argument(
+        "--generate-pdf",
+        action="store_true",
+        help="Generate PDF report after calibration"
+    )
+    parser.add_argument(
+        "--pdf-output",
+        type=str,
+        metavar="PATH",
+        help="Custom path for PDF report (default: <output>_report.pdf)"
+    )
+
+    # Board configuration options
+    board_group = parser.add_argument_group('ChArUco Board Configuration')
+    board_group.add_argument(
+        "--squares-x",
+        type=int,
+        default=8,
+        help="Number of squares in X direction (default: 8)"
+    )
+    board_group.add_argument(
+        "--squares-y",
+        type=int,
+        default=8,
+        help="Number of squares in Y direction (default: 8)"
+    )
+    board_group.add_argument(
+        "--square-size",
+        type=float,
+        default=11.0,
+        help="Square size in centimeters (default: 11cm)"
+    )
+    board_group.add_argument(
+        "--marker-size",
+        type=float,
+        default=7.5,
+        help="ArUco marker size in centimeters (default: 7.5cm)"
+    )
+    board_group.add_argument(
+        "--dictionary",
+        type=str,
+        default="DICT_6X6_250",
+        choices=dict_choices,
+        help="ArUco dictionary (default: DICT_6X6_250)"
+    )
 
     args = parser.parse_args()
 
+    # Validate marker size vs square size
+    if args.marker_size >= args.square_size:
+        print(f"Error: Marker size ({args.marker_size}cm) must be smaller than square size ({args.square_size}cm)")
+        return 1
+
+    # Get dictionary ID
+    dictionary_id = ARUCO_DICTIONARIES.get(args.dictionary)
+    if dictionary_id is None:
+        print(f"Error: Unknown dictionary '{args.dictionary}'")
+        print(f"Available dictionaries: {', '.join(dict_choices)}")
+        return 1
+
+    # Create board configuration
+    board_config = ChArUcoBoardConfig(
+        squares_x=args.squares_x,
+        squares_y=args.squares_y,
+        square_size=args.square_size / 100.0,  # Convert cm to meters
+        marker_size=args.marker_size / 100.0,  # Convert cm to meters
+        dictionary_id=dictionary_id
+    )
+
     if args.demo or args.command == 'demo':
         run_demo(args.num, args.intrinsics, args.output)
+    elif args.from_directory:
+        # Debug mode: load from directory
+        print(f"Loading measurements from: {args.from_directory}")
+        menu = ExtrinsicCalibrationMenu(
+            board_config=board_config,
+            save_images=args.save_images,
+            image_dir=args.image_dir
+        )
+        menu.image_dir = args.from_directory
+        menu._load_measurements_from_dir()
+        menu.run()
     else:
-        interactive_menu()
+        interactive_menu(
+            board_config=board_config,
+            save_images=args.save_images,
+            image_dir=args.image_dir
+        )
 
     return 0
 
