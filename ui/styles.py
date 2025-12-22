@@ -192,7 +192,15 @@ QComboBox {{
     border: 1px solid {COLORS['border']};
     border-radius: 4px;
     background-color: {COLORS['white']};
-    min-width: 100px;
+}}
+
+QTableWidget QComboBox {{
+    padding: 4px 8px;
+    min-width: 50px;
+}}
+
+QTableWidget QLineEdit {{
+    padding: 4px 8px;
 }}
 
 QComboBox:focus {{
