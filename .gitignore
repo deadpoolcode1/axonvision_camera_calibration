@@ -1,0 +1,20 @@
+# Virtual environment
+bin/
+lib/
+lib64
+include/
+pyvenv.cfg
+__pycache__/
+*.pyc
+
+# Calibration outputs (optional - remove if you want to track these)
+*_intrinsics.json
+*_extrinsics.json
+calibration_images/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
