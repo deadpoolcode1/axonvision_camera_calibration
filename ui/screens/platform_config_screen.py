@@ -31,7 +31,7 @@ class CameraTableWidget(QTableWidget):
     camera_verify_requested = Signal(int)  # Emits row index when verify is clicked
 
     COLUMNS = ['#', 'Camera ID', 'Type', 'Camera Model', 'Mounting Position', 'IP Address', 'Intrinsic', 'Verify', 'Action']
-    COLUMN_WIDTHS = [40, 100, 60, 130, 200, 180, 80, 70, 80]
+    COLUMN_WIDTHS = [40, 100, 60, 130, 200, 180, 80, 80, 80]
 
     def __init__(self, parent=None):
         super().__init__(parent)
