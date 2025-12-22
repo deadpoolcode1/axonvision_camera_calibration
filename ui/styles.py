@@ -143,16 +143,38 @@ QPushButton#remove_button:hover {{
     background-color: {COLORS['danger_hover']};
 }}
 
+QTableWidget QPushButton#remove_button {{
+    background-color: {COLORS['danger']};
+    color: white;
+}}
+
+QTableWidget QPushButton#remove_button:hover {{
+    background-color: {COLORS['danger_hover']};
+}}
+
 QPushButton#verify_button {{
     background-color: {COLORS['warning']};
     color: {COLORS['text_dark']};
-    padding: 4px 8px;
+    padding: 4px 6px;
     font-size: 11px;
     font-weight: bold;
-    min-width: 50px;
+    min-width: 55px;
+    max-width: 70px;
 }}
 
 QPushButton#verify_button:hover {{
+    background-color: #E0A800;
+}}
+
+QTableWidget QPushButton#verify_button {{
+    background-color: {COLORS['warning']};
+    color: {COLORS['text_dark']};
+    padding: 4px 6px;
+    min-width: 55px;
+    max-width: 70px;
+}}
+
+QTableWidget QPushButton#verify_button:hover {{
     background-color: #E0A800;
 }}
 
