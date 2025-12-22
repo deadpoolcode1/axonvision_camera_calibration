@@ -134,8 +134,9 @@ QPushButton#add_button:hover {{
 QPushButton#remove_button {{
     background-color: {COLORS['danger']};
     color: white;
-    padding: 6px 12px;
-    font-size: 12px;
+    padding: 4px 8px;
+    font-size: 11px;
+    min-width: 55px;
 }}
 
 QPushButton#remove_button:hover {{
@@ -145,9 +146,10 @@ QPushButton#remove_button:hover {{
 QPushButton#verify_button {{
     background-color: {COLORS['warning']};
     color: {COLORS['text_dark']};
-    padding: 6px 12px;
-    font-size: 12px;
+    padding: 4px 8px;
+    font-size: 11px;
     font-weight: bold;
+    min-width: 50px;
 }}
 
 QPushButton#verify_button:hover {{

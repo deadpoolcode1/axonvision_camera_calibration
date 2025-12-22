@@ -35,6 +35,7 @@ class CameraTableWidget(QTableWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.base_path = "."  # Store base path for intrinsic file checks
         self._setup_table()
 
     def _setup_table(self):
@@ -60,6 +61,7 @@ class CameraTableWidget(QTableWidget):
 
     def add_camera_row(self, camera: CameraDefinition, base_path: str = ".") -> int:
         """Add a new camera row to the table."""
+        self.base_path = base_path  # Store for later use
         row = self.rowCount()
         self.insertRow(row)
 
@@ -140,8 +142,12 @@ class CameraTableWidget(QTableWidget):
         return row
 
     def _on_camera_id_changed(self, row: int, text: str):
-        """Handle camera ID change."""
-        pass
+        """Handle camera ID change - update intrinsic status."""
+        # Check if intrinsic calibration file exists for the new camera_id
+        intrinsic_file_path = f"camera_intrinsic/camera_intrinsics_{text}.json"
+        full_path = Path(self.base_path) / intrinsic_file_path
+        has_intrinsic = full_path.exists()
+        self.update_intrinsic_status(row, has_intrinsic, intrinsic_file_path)
 
     def _on_type_changed(self, row: int, text: str):
         """Handle camera type change."""
