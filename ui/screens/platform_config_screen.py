@@ -8,6 +8,8 @@ Configure platform information and camera setup:
 """
 
 from pathlib import Path
+import subprocess
+import platform
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QLineEdit, QComboBox, QTableWidget, QTableWidgetItem,
@@ -26,9 +28,10 @@ class CameraTableWidget(QTableWidget):
     """Custom table widget for camera configuration."""
 
     camera_removed = Signal(int)  # Emits row index when camera is removed
+    camera_verify_requested = Signal(int)  # Emits row index when verify is clicked
 
-    COLUMNS = ['Camera', 'Type', 'Camera Model', 'Mounting Position', 'IP Address', 'Intrinsic', 'Action']
-    COLUMN_WIDTHS = [60, 80, 120, 150, 140, 80, 80]
+    COLUMNS = ['Camera', 'Camera ID', 'Type', 'Camera Model', 'Mounting Position', 'IP Address', 'Intrinsic', 'Verify', 'Action']
+    COLUMN_WIDTHS = [60, 100, 80, 120, 150, 140, 80, 70, 80]
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -45,8 +48,8 @@ class CameraTableWidget(QTableWidget):
             self.setColumnWidth(i, width)
 
         # Make last columns stretch
-        header.setSectionResizeMode(3, QHeaderView.Stretch)  # Mounting Position
-        header.setSectionResizeMode(4, QHeaderView.Stretch)  # IP Address
+        header.setSectionResizeMode(4, QHeaderView.Stretch)  # Mounting Position
+        header.setSectionResizeMode(5, QHeaderView.Stretch)  # IP Address
 
         # Table settings
         self.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -66,32 +69,38 @@ class CameraTableWidget(QTableWidget):
         num_item.setFlags(num_item.flags() & ~Qt.ItemIsEditable)
         self.setItem(row, 0, num_item)
 
+        # Camera ID input
+        camera_id_edit = QLineEdit(camera.camera_id)
+        camera_id_edit.setPlaceholderText("cam_1")
+        camera_id_edit.textChanged.connect(lambda text, r=row: self._on_camera_id_changed(r, text))
+        self.setCellWidget(row, 1, camera_id_edit)
+
         # Type dropdown
         type_combo = QComboBox()
         type_combo.addItems(CAMERA_TYPES)
         type_combo.setCurrentText(camera.camera_type)
         type_combo.currentTextChanged.connect(lambda text, r=row: self._on_type_changed(r, text))
-        self.setCellWidget(row, 1, type_combo)
+        self.setCellWidget(row, 2, type_combo)
 
         # Model dropdown
         model_combo = QComboBox()
         model_combo.addItems(CAMERA_MODELS)
         model_combo.setCurrentText(camera.camera_model)
         model_combo.currentTextChanged.connect(lambda text, r=row: self._on_model_changed(r, text))
-        self.setCellWidget(row, 2, model_combo)
+        self.setCellWidget(row, 3, model_combo)
 
         # Mounting Position dropdown
         position_combo = QComboBox()
         position_combo.addItems(MOUNTING_POSITIONS)
         position_combo.setCurrentText(camera.mounting_position)
         position_combo.currentTextChanged.connect(lambda text, r=row: self._on_position_changed(r, text))
-        self.setCellWidget(row, 3, position_combo)
+        self.setCellWidget(row, 4, position_combo)
 
         # IP Address input
         ip_edit = QLineEdit(camera.ip_address)
         ip_edit.setPlaceholderText("192.168.1.xxx")
         ip_edit.textChanged.connect(lambda text, r=row: self._on_ip_changed(r, text))
-        self.setCellWidget(row, 4, ip_edit)
+        self.setCellWidget(row, 5, ip_edit)
 
         # Intrinsic status indicator
         has_intrinsic = camera.has_intrinsic_calibration(base_path)
@@ -111,22 +120,31 @@ class CameraTableWidget(QTableWidget):
         intrinsic_layout = QHBoxLayout(intrinsic_container)
         intrinsic_layout.setContentsMargins(0, 0, 0, 0)
         intrinsic_layout.addWidget(intrinsic_label, alignment=Qt.AlignCenter)
-        self.setCellWidget(row, 5, intrinsic_container)
+        self.setCellWidget(row, 6, intrinsic_container)
+
+        # Verify button
+        verify_btn = QPushButton("Verify")
+        verify_btn.setObjectName("verify_button")
+        verify_btn.clicked.connect(lambda checked, r=row: self._on_verify_clicked(r))
+        self.setCellWidget(row, 7, verify_btn)
 
         # Remove button
         remove_btn = QPushButton("Remove")
         remove_btn.setObjectName("remove_button")
         remove_btn.clicked.connect(lambda checked, r=row: self._on_remove_clicked(r))
-        self.setCellWidget(row, 6, remove_btn)
+        self.setCellWidget(row, 8, remove_btn)
 
         # Adjust row height
         self.setRowHeight(row, 45)
 
         return row
 
+    def _on_camera_id_changed(self, row: int, text: str):
+        """Handle camera ID change."""
+        pass
+
     def _on_type_changed(self, row: int, text: str):
         """Handle camera type change."""
-        # Store data in item for later retrieval
         pass
 
     def _on_model_changed(self, row: int, text: str):
@@ -141,6 +159,10 @@ class CameraTableWidget(QTableWidget):
         """Handle IP address change."""
         pass
 
+    def _on_verify_clicked(self, row: int):
+        """Handle verify button click."""
+        self.camera_verify_requested.emit(row)
+
     def _on_remove_clicked(self, row: int):
         """Handle remove button click."""
         self.camera_removed.emit(row)
@@ -152,10 +174,11 @@ class CameraTableWidget(QTableWidget):
 
         return {
             'camera_number': int(self.item(row, 0).text()),
-            'camera_type': self.cellWidget(row, 1).currentText(),
-            'camera_model': self.cellWidget(row, 2).currentText(),
-            'mounting_position': self.cellWidget(row, 3).currentText(),
-            'ip_address': self.cellWidget(row, 4).text(),
+            'camera_id': self.cellWidget(row, 1).text(),
+            'camera_type': self.cellWidget(row, 2).currentText(),
+            'camera_model': self.cellWidget(row, 3).currentText(),
+            'mounting_position': self.cellWidget(row, 4).currentText(),
+            'ip_address': self.cellWidget(row, 5).text(),
         }
 
     def get_all_cameras(self) -> list:
@@ -171,7 +194,7 @@ class CameraTableWidget(QTableWidget):
 
     def update_intrinsic_status(self, row: int, has_intrinsic: bool, file_path: str):
         """Update the intrinsic calibration status for a row."""
-        container = self.cellWidget(row, 5)
+        container = self.cellWidget(row, 6)
         if container:
             label = container.findChild(QLabel)
             if label:
@@ -283,6 +306,7 @@ class PlatformConfigScreen(QWidget):
         # Camera table
         self.camera_table = CameraTableWidget()
         self.camera_table.camera_removed.connect(self._on_camera_removed)
+        self.camera_table.camera_verify_requested.connect(self._on_camera_verify)
         self.camera_table.setMinimumHeight(200)
         camera_section.addWidget(self.camera_table)
 
@@ -375,6 +399,64 @@ class PlatformConfigScreen(QWidget):
         self.config.remove_camera(row)
         self._reload_camera_table()
 
+    def _on_camera_verify(self, row: int):
+        """Verify camera connectivity and intrinsic calibration file."""
+        # Get current camera data from UI
+        camera_data = self.camera_table.get_camera_data(row)
+        ip_address = camera_data.get('ip_address', '')
+        camera_id = camera_data.get('camera_id', '')
+        camera_num = camera_data.get('camera_number', row + 1)
+
+        issues = []
+        success_items = []
+
+        # Check 1: Ping the device
+        ping_ok = self._ping_device(ip_address)
+        if ping_ok:
+            success_items.append(f"Network: Device at {ip_address} is reachable")
+        else:
+            issues.append(f"Network: Cannot reach device at {ip_address}")
+
+        # Check 2: Verify intrinsic calibration file exists
+        intrinsic_path = Path(self.base_path) / f"camera_intrinsic/camera_intrinsics_{camera_id}.json"
+        if intrinsic_path.exists():
+            success_items.append(f"Intrinsic: Calibration file found for '{camera_id}'")
+        else:
+            issues.append(f"Intrinsic: Calibration file not found at:\n{intrinsic_path}")
+
+        # Show result dialog
+        if issues:
+            msg = f"Camera {camera_num} verification found issues:\n\n"
+            msg += "ISSUES:\n" + "\n".join(f"  - {issue}" for issue in issues)
+            if success_items:
+                msg += "\n\nPASSED:\n" + "\n".join(f"  + {item}" for item in success_items)
+            QMessageBox.warning(self, f"Camera {camera_num} - Verification Failed", msg)
+        else:
+            msg = f"Camera {camera_num} verification passed!\n\n"
+            msg += "\n".join(f"  + {item}" for item in success_items)
+            QMessageBox.information(self, f"Camera {camera_num} - Verification OK", msg)
+
+    def _ping_device(self, ip_address: str) -> bool:
+        """Ping a device to check if it's reachable."""
+        if not ip_address:
+            return False
+
+        try:
+            # Determine ping command based on OS
+            param = '-n' if platform.system().lower() == 'windows' else '-c'
+            timeout_param = '-w' if platform.system().lower() == 'windows' else '-W'
+
+            # Run ping with 1 packet and 2 second timeout
+            result = subprocess.run(
+                ['ping', param, '1', timeout_param, '2', ip_address],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5
+            )
+            return result.returncode == 0
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, FileNotFoundError):
+            return False
+
     def _reload_camera_table(self):
         """Reload the camera table from config."""
         self.camera_table.clear_all()
@@ -409,6 +491,7 @@ class PlatformConfigScreen(QWidget):
         for i, data in enumerate(camera_data_list):
             if i < len(self.config.cameras):
                 cam = self.config.cameras[i]
+                cam.camera_id = data['camera_id']
                 cam.camera_type = data['camera_type']
                 cam.camera_model = data['camera_model']
                 cam.mounting_position = data['mounting_position']
