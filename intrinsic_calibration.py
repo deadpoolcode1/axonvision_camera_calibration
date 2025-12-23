@@ -429,11 +429,11 @@ class NetworkCameraSource(ImageSource):
         print("Stream started, connecting via GStreamer...")
         time.sleep(1.0)  # Give stream time to start
 
-        # GStreamer pipeline for OpenCV
+        # GStreamer pipeline for OpenCV (with queue for buffering)
         pipeline = (
             f"udpsrc address={self.multicast_host} port={self.stream_port} "
             f'caps="application/x-rtp,media=video,encoding-name=H265,payload=96" ! '
-            f"rtph265depay ! h265parse ! avdec_h265 ! videoconvert ! "
+            f"rtph265depay ! h265parse ! avdec_h265 ! queue ! videoconvert ! "
             f"video/x-raw,format=BGR ! appsink drop=1"
         )
 

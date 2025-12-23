@@ -244,12 +244,14 @@ class IntrinsicCalibrationDialog(QDialog):
                 ip=self.ip_address,
                 api_port=5000,
                 multicast_host="239.255.0.1",
-                stream_port=5010
+                stream_port=5010,
+                width=1920,
+                height=1200  # Updated for new camera resolution
             )
 
             if self.camera_source.connect():
                 self.is_capturing = True
-                self.timer.start(33)  # ~30 FPS
+                self.timer.start(40)  # ~25 FPS to match camera framerate
             else:
                 self._show_connection_error("Failed to connect to camera stream")
 
