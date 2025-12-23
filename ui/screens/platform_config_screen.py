@@ -50,9 +50,18 @@ class CameraTableWidget(QTableWidget):
         for i, width in enumerate(self.COLUMN_WIDTHS):
             self.setColumnWidth(i, width)
 
-        # Make last columns stretch
+        # Set resize modes for all columns
+        # Fixed columns (buttons and small fields)
+        header.setSectionResizeMode(0, QHeaderView.Fixed)    # #
+        header.setSectionResizeMode(1, QHeaderView.Fixed)    # Camera ID
+        header.setSectionResizeMode(2, QHeaderView.Fixed)    # Type
+        header.setSectionResizeMode(3, QHeaderView.Fixed)    # Camera Model
         header.setSectionResizeMode(4, QHeaderView.Stretch)  # Mounting Position
         header.setSectionResizeMode(5, QHeaderView.Stretch)  # IP Address
+        header.setSectionResizeMode(6, QHeaderView.Fixed)    # Intrinsic
+        header.setSectionResizeMode(7, QHeaderView.Fixed)    # Calibrate
+        header.setSectionResizeMode(8, QHeaderView.Fixed)    # Verify
+        header.setSectionResizeMode(9, QHeaderView.Fixed)    # Action
 
         # Table settings
         self.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -126,23 +135,38 @@ class CameraTableWidget(QTableWidget):
         intrinsic_layout.addWidget(intrinsic_label, alignment=Qt.AlignCenter)
         self.setCellWidget(row, 6, intrinsic_container)
 
-        # Calibrate button
+        # Calibrate button - wrap in container to prevent overflow
         calibrate_btn = QPushButton("Calibrate")
         calibrate_btn.setObjectName("calibrate_button")
         calibrate_btn.clicked.connect(lambda checked, r=row: self._on_calibrate_clicked(r))
-        self.setCellWidget(row, 7, calibrate_btn)
+        calibrate_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        calibrate_container = QWidget()
+        calibrate_layout = QHBoxLayout(calibrate_container)
+        calibrate_layout.setContentsMargins(2, 2, 2, 2)
+        calibrate_layout.addWidget(calibrate_btn, alignment=Qt.AlignCenter)
+        self.setCellWidget(row, 7, calibrate_container)
 
-        # Verify button
+        # Verify button - wrap in container to prevent overflow
         verify_btn = QPushButton("Verify")
         verify_btn.setObjectName("verify_button")
         verify_btn.clicked.connect(lambda checked, r=row: self._on_verify_clicked(r))
-        self.setCellWidget(row, 8, verify_btn)
+        verify_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        verify_container = QWidget()
+        verify_layout = QHBoxLayout(verify_container)
+        verify_layout.setContentsMargins(2, 2, 2, 2)
+        verify_layout.addWidget(verify_btn, alignment=Qt.AlignCenter)
+        self.setCellWidget(row, 8, verify_container)
 
-        # Remove button
+        # Remove button - wrap in container to prevent overflow
         remove_btn = QPushButton("Remove")
         remove_btn.setObjectName("remove_button")
         remove_btn.clicked.connect(lambda checked, r=row: self._on_remove_clicked(r))
-        self.setCellWidget(row, 9, remove_btn)
+        remove_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        remove_container = QWidget()
+        remove_layout = QHBoxLayout(remove_container)
+        remove_layout.setContentsMargins(2, 2, 2, 2)
+        remove_layout.addWidget(remove_btn, alignment=Qt.AlignCenter)
+        self.setCellWidget(row, 9, remove_container)
 
         # Adjust row height
         self.setRowHeight(row, 45)
