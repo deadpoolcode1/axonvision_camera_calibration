@@ -184,6 +184,25 @@ class IntrinsicCalibrationDialog(QDialog):
         self.cancel_btn.clicked.connect(self._on_cancel)
         button_layout.addWidget(self.cancel_btn)
 
+        # Retry button (shown when connection fails)
+        self.retry_btn = QPushButton("Retry Connection")
+        self.retry_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['warning']};
+                color: {COLORS['text_dark']};
+                padding: 10px 24px;
+                font-size: 14px;
+                font-weight: bold;
+                border-radius: 6px;
+            }}
+            QPushButton:hover {{
+                background-color: #E0A800;
+            }}
+        """)
+        self.retry_btn.clicked.connect(self._on_retry_connection)
+        self.retry_btn.hide()  # Initially hidden
+        button_layout.addWidget(self.retry_btn)
+
         button_layout.addStretch()
 
         self.capture_btn = QPushButton("Capture (SPACE)")
@@ -238,6 +257,8 @@ class IntrinsicCalibrationDialog(QDialog):
     def _connect_camera(self):
         """Connect to the network camera."""
         self.video_label.setText("Connecting to camera...\nStopping any existing streams...")
+        from PySide6.QtWidgets import QApplication
+        QApplication.processEvents()
 
         try:
             self.camera_source = NetworkCameraSource(
@@ -248,31 +269,63 @@ class IntrinsicCalibrationDialog(QDialog):
                 timeout=10.0  # Increased timeout for reliability
             )
 
-            self.video_label.setText("Starting camera stream...")
-            from PySide6.QtWidgets import QApplication
+            self.video_label.setText(f"Starting camera stream from {self.ip_address}...")
             QApplication.processEvents()
 
             if self.camera_source.connect():
                 self.is_capturing = True
                 self.timer.start(33)  # ~30 FPS
             else:
-                self._show_connection_error("Failed to connect to camera stream")
+                # Get detailed error message from the camera source
+                error_msg = self.camera_source.last_error or "Failed to connect to camera stream"
+                self._show_connection_error(error_msg)
 
         except Exception as e:
             self._show_connection_error(f"Camera connection error: {str(e)}")
 
     def _show_connection_error(self, message: str):
         """Show connection error in the video area."""
-        self.video_label.setText(f"Connection Error:\n{message}\n\nPlease verify the camera IP and try again.")
+        self.video_label.setText(
+            f"Connection Error:\n\n{message}\n\n"
+            f"Troubleshooting:\n"
+            f"• Verify the camera IP address ({self.ip_address})\n"
+            f"• Check that the camera is powered on\n"
+            f"• Ensure the camera API is running on port 5000\n"
+            f"• Check network/firewall settings for multicast"
+        )
         self.video_label.setStyleSheet(f"""
             QLabel {{
                 background-color: #1a1a1a;
                 border: 2px solid {COLORS['danger']};
                 border-radius: 6px;
                 color: {COLORS['danger']};
-                font-size: 14px;
+                font-size: 13px;
+                padding: 20px;
             }}
         """)
+        # Show retry button
+        self.retry_btn.show()
+
+    def _on_retry_connection(self):
+        """Retry camera connection."""
+        # Hide retry button and reset video label
+        self.retry_btn.hide()
+        self.video_label.setStyleSheet(f"""
+            QLabel {{
+                background-color: #1a1a1a;
+                border: 2px solid {COLORS['border']};
+                border-radius: 6px;
+                color: {COLORS['white']};
+            }}
+        """)
+
+        # Clean up any existing connection
+        if self.camera_source:
+            self.camera_source.release()
+            self.camera_source = None
+
+        # Try to connect again
+        self._connect_camera()
 
     def _stop_camera(self):
         """Stop camera capture and release resources."""
