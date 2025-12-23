@@ -178,6 +178,32 @@ QTableWidget QPushButton#verify_button:hover {{
     background-color: #E0A800;
 }}
 
+QPushButton#calibrate_button {{
+    background-color: {COLORS['primary']};
+    color: white;
+    padding: 4px 6px;
+    font-size: 11px;
+    font-weight: bold;
+    min-width: 60px;
+    max-width: 75px;
+}}
+
+QPushButton#calibrate_button:hover {{
+    background-color: {COLORS['primary_dark']};
+}}
+
+QTableWidget QPushButton#calibrate_button {{
+    background-color: {COLORS['primary']};
+    color: white;
+    padding: 4px 6px;
+    min-width: 60px;
+    max-width: 75px;
+}}
+
+QTableWidget QPushButton#calibrate_button:hover {{
+    background-color: {COLORS['primary_dark']};
+}}
+
 QPushButton#nav_button {{
     background-color: {COLORS['primary']};
     color: white;
