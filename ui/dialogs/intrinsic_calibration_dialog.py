@@ -186,11 +186,15 @@ class IntrinsicCalibrationDialog(QDialog):
 
         self.cancel_btn = QPushButton("Cancel (ESC)")
         self.cancel_btn.setObjectName("cancel_button")
+        self.cancel_btn.setAutoDefault(False)
+        self.cancel_btn.setDefault(False)
         self.cancel_btn.clicked.connect(self._on_cancel)
         button_layout.addWidget(self.cancel_btn)
 
         # Retry button (shown when connection fails)
         self.retry_btn = QPushButton("Retry Connection")
+        self.retry_btn.setAutoDefault(False)
+        self.retry_btn.setDefault(False)
         self.retry_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {COLORS['warning']};
@@ -212,12 +216,16 @@ class IntrinsicCalibrationDialog(QDialog):
 
         self.capture_btn = QPushButton("Capture (SPACE)")
         self.capture_btn.setObjectName("nav_button")
+        self.capture_btn.setAutoDefault(False)
+        self.capture_btn.setDefault(False)
         self.capture_btn.clicked.connect(self._on_capture)
         self.capture_btn.setEnabled(False)
         button_layout.addWidget(self.capture_btn)
 
         self.calibrate_btn = QPushButton("Run Calibration")
         self.calibrate_btn.setObjectName("primary_button")
+        self.calibrate_btn.setAutoDefault(False)
+        self.calibrate_btn.setDefault(False)
         self.calibrate_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {COLORS['success']};
