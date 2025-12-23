@@ -375,6 +375,7 @@ class NetworkCameraSource(ImageSource):
         self.timeout = timeout
         self.cap: Optional[cv2.VideoCapture] = None
         self._stream_started = False
+        self.last_error: str = ""  # Store last error message for UI feedback
 
         # Try to import requests for API calls
         try:
@@ -401,10 +402,20 @@ class NetworkCameraSource(ImageSource):
                 headers={"Content-Type": "application/json"},
                 timeout=self.timeout
             )
-            self._stream_started = response.status_code == 200
-            return self._stream_started
+            if response.status_code == 200:
+                self._stream_started = True
+                return True
+            else:
+                self.last_error = f"API returned HTTP {response.status_code}"
+                return False
+        except self.requests.exceptions.Timeout:
+            self.last_error = f"Connection timeout - camera at {self.ip} not responding"
+            return False
+        except self.requests.exceptions.ConnectionError:
+            self.last_error = f"Connection refused - camera at {self.ip}:{self.api_port} unreachable"
+            return False
         except Exception as e:
-            print(f"Failed to start stream: {e}")
+            self.last_error = f"Failed to start stream: {e}"
             return False
 
     def _stop_stream(self):
@@ -423,6 +434,8 @@ class NetworkCameraSource(ImageSource):
         """Connect to the network camera"""
         import time
 
+        self.last_error = ""
+
         # First, try to stop any existing stream (in case previous session left it running)
         print(f"Connecting to camera at {self.ip}...")
         self._stop_stream()
@@ -430,7 +443,7 @@ class NetworkCameraSource(ImageSource):
 
         # Start the camera stream via API
         if not self._start_stream():
-            print("Failed to start camera stream via API")
+            print(f"Failed to start camera stream via API: {self.last_error}")
             return False
 
         print("Stream started, connecting via GStreamer...")
@@ -447,12 +460,26 @@ class NetworkCameraSource(ImageSource):
         self.cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
 
         if not self.cap.isOpened():
-            print("Failed to open GStreamer pipeline")
+            self.last_error = "Failed to open GStreamer pipeline - check GStreamer installation"
+            print(self.last_error)
             self._stop_stream()
             return False
 
-        print("Connected to network camera")
-        return True
+        # Try to read a test frame to verify stream is working
+        for attempt in range(3):
+            ret, frame = self.cap.read()
+            if ret and frame is not None:
+                print("Connected to network camera")
+                return True
+            time.sleep(0.5)
+
+        # If we couldn't read any frames, the connection failed
+        self.last_error = "Connected but no frames received - check multicast network settings"
+        print(self.last_error)
+        self._stop_stream()
+        self.cap.release()
+        self.cap = None
+        return False
 
     def get_image(self) -> Optional[np.ndarray]:
         if self.cap is None:
