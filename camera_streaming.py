@@ -105,6 +105,7 @@ class CameraConfig:
     api_port: int = 5000
     multicast_host: str = "239.255.0.1"
     stream_port: int = 5010
+    bitrate: int = 4000000
     width: int = 1920
     height: int = 1080
     timeout: float = 5.0
@@ -455,7 +456,8 @@ class CameraStreamController:
         try:
             payload = {
                 "host": self.config.multicast_host,
-                "port": self.config.stream_port
+                "port": self.config.stream_port,
+                "bitrate": self.config.bitrate
             }
 
             response = requests.post(
@@ -499,17 +501,17 @@ class CameraStreamController:
     def get_gstreamer_pipeline(self, output: str = "autovideosink") -> str:
         """Get GStreamer pipeline command"""
         return (
-            f"gst-launch-1.0 udpsrc address={self.config.multicast_host} "
-            f"port={self.config.stream_port} "
-            f'caps="application/x-rtp,media=video,encoding-name=H265,payload=96" ! '
+            f"gst-launch-1.0 udpsrc multicast-group={self.config.multicast_host} "
+            f"port={self.config.stream_port} ! "
+            f"application/x-rtp,payload=96 ! "
             f"rtph265depay ! h265parse ! avdec_h265 ! videoconvert ! {output}"
         )
 
     def get_gstreamer_opencv_pipeline(self) -> str:
         """Get GStreamer pipeline for OpenCV capture"""
         return (
-            f"udpsrc address={self.config.multicast_host} port={self.config.stream_port} "
-            f'caps="application/x-rtp,media=video,encoding-name=H265,payload=96" ! '
+            f"udpsrc multicast-group={self.config.multicast_host} port={self.config.stream_port} ! "
+            f"application/x-rtp,payload=96 ! "
             f"rtph265depay ! h265parse ! avdec_h265 ! videoconvert ! "
             f"video/x-raw,format=BGR ! appsink drop=1"
         )
