@@ -71,6 +71,13 @@ class IntrinsicCalibrationDialog(QDialog):
         self._setup_ui()
         self.setModal(True)
 
+        # Install event filter on all buttons to intercept SPACE key
+        # This prevents SPACE from clicking buttons (which would close dialog)
+        self.cancel_btn.installEventFilter(self)
+        self.retry_btn.installEventFilter(self)
+        self.capture_btn.installEventFilter(self)
+        self.calibrate_btn.installEventFilter(self)
+
     def _setup_ui(self):
         """Setup the dialog UI."""
         self.setWindowTitle(f"Intrinsic Calibration - {self.camera_id}")
@@ -230,6 +237,14 @@ class IntrinsicCalibrationDialog(QDialog):
         """Cleanup when dialog is closed."""
         self._stop_camera()
         super().closeEvent(event)
+
+    def eventFilter(self, watched, event):
+        """Filter SPACE key from buttons to prevent accidental dialog close."""
+        if event.type() == QEvent.KeyPress and event.key() == Qt.Key_Space:
+            # Intercept SPACE on any button - redirect to capture
+            self._on_capture()
+            return True  # Event consumed, don't let button process it
+        return super().eventFilter(watched, event)
 
     def event(self, event):
         """Intercept key events before they reach buttons."""
