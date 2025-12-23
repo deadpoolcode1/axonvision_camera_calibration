@@ -281,6 +281,16 @@ QTableWidget::item {{
     padding: 8px;
 }}
 
+QTableWidget::item:selected {{
+    background-color: {COLORS['table_header']};
+    color: {COLORS['text_dark']};
+}}
+
+QTableWidget::item:focus {{
+    background-color: {COLORS['table_header']};
+    outline: none;
+}}
+
 QHeaderView::section {{
     background-color: {COLORS['table_header']};
     color: {COLORS['primary']};

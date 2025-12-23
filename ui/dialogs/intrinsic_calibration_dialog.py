@@ -237,15 +237,20 @@ class IntrinsicCalibrationDialog(QDialog):
 
     def _connect_camera(self):
         """Connect to the network camera."""
-        self.video_label.setText("Connecting to camera...")
+        self.video_label.setText("Connecting to camera...\nStopping any existing streams...")
 
         try:
             self.camera_source = NetworkCameraSource(
                 ip=self.ip_address,
                 api_port=5000,
                 multicast_host="239.255.0.1",
-                stream_port=5010
+                stream_port=5010,
+                timeout=10.0  # Increased timeout for reliability
             )
+
+            self.video_label.setText("Starting camera stream...")
+            from PySide6.QtWidgets import QApplication
+            QApplication.processEvents()
 
             if self.camera_source.connect():
                 self.is_capturing = True
