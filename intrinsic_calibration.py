@@ -430,10 +430,11 @@ class NetworkCameraSource(ImageSource):
         time.sleep(1.0)  # Give stream time to start
 
         # GStreamer pipeline for OpenCV (with queue for buffering)
+        # Use multicast-group parameter for multicast addresses
         pipeline = (
-            f"udpsrc address={self.multicast_host} port={self.stream_port} "
-            f'caps="application/x-rtp,media=video,encoding-name=H265,payload=96" ! '
-            f"rtph265depay ! h265parse ! avdec_h265 ! queue ! videoconvert ! "
+            f"udpsrc multicast-group={self.multicast_host} port={self.stream_port} ! "
+            f"application/x-rtp,payload=96 ! rtph265depay ! h265parse ! "
+            f"avdec_h265 ! queue ! videoconvert ! "
             f"video/x-raw,format=BGR ! appsink drop=1"
         )
 
