@@ -558,11 +558,11 @@ python3 camera_streaming.py preview \
 # Start stream via API first
 curl -X POST http://10.100.102.222:5000/api/stream/start \
     -H "Content-Type: application/json" \
-    -d '{"host": "239.255.0.1", "port": 5010}'
+    -d '{"host": "239.255.0.1", "port": 5010, "bitrate": 4000000}'
 
 # View with GStreamer
-gst-launch-1.0 udpsrc address=239.255.0.1 port=5010 \
-    caps="application/x-rtp,media=video,encoding-name=H265,payload=96" ! \
+gst-launch-1.0 udpsrc multicast-group=239.255.0.1 port=5010 ! \
+    application/x-rtp,payload=96 ! \
     rtph265depay ! h265parse ! avdec_h265 ! videoconvert ! autovideosink
 ```
 

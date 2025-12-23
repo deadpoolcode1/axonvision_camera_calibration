@@ -363,11 +363,13 @@ class NetworkCameraSource(ImageSource):
 
     def __init__(self, ip: str = "10.100.102.222", api_port: int = 5000,
                  multicast_host: str = "239.255.0.1", stream_port: int = 5010,
-                 width: int = 1920, height: int = 1080, timeout: float = 5.0):
+                 bitrate: int = 4000000, width: int = 1920, height: int = 1080,
+                 timeout: float = 5.0):
         self.ip = ip
         self.api_port = api_port
         self.multicast_host = multicast_host
         self.stream_port = stream_port
+        self.bitrate = bitrate
         self.width = width
         self.height = height
         self.timeout = timeout
@@ -390,7 +392,8 @@ class NetworkCameraSource(ImageSource):
         try:
             payload = {
                 "host": self.multicast_host,
-                "port": self.stream_port
+                "port": self.stream_port,
+                "bitrate": self.bitrate
             }
             response = self.requests.post(
                 f"{self.base_url}/api/stream/start",
@@ -431,8 +434,8 @@ class NetworkCameraSource(ImageSource):
 
         # GStreamer pipeline for OpenCV
         pipeline = (
-            f"udpsrc address={self.multicast_host} port={self.stream_port} "
-            f'caps="application/x-rtp,media=video,encoding-name=H265,payload=96" ! '
+            f"udpsrc multicast-group={self.multicast_host} port={self.stream_port} ! "
+            f"application/x-rtp,payload=96 ! "
             f"rtph265depay ! h265parse ! avdec_h265 ! videoconvert ! "
             f"video/x-raw,format=BGR ! appsink drop=1"
         )
