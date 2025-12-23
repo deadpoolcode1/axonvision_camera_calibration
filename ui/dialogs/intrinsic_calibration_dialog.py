@@ -75,7 +75,12 @@ class IntrinsicCalibrationDialog(QDialog):
         """Setup the dialog UI."""
         self.setWindowTitle(f"Intrinsic Calibration - {self.camera_id}")
         self.setMinimumSize(900, 700)
-        self.setWindowFlags(self.windowFlags() | Qt.WindowMaximizeButtonHint)
+        # Enable proper window controls (minimize, maximize, close)
+        self.setWindowFlags(
+            Qt.Window |
+            Qt.WindowCloseButtonHint |
+            Qt.WindowMinMaxButtonsHint
+        )
 
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(20, 20, 20, 20)
@@ -249,8 +254,10 @@ class IntrinsicCalibrationDialog(QDialog):
         """Handle key presses for capture (Space) and cancel (ESC)."""
         if event.key() == Qt.Key_Space:
             self._on_capture()
+            event.accept()  # Prevent event from propagating to dialog buttons
         elif event.key() == Qt.Key_Escape:
             self._on_cancel()
+            event.accept()
         else:
             super().keyPressEvent(event)
 
@@ -398,7 +405,19 @@ class IntrinsicCalibrationDialog(QDialog):
 
     def _on_capture(self):
         """Handle capture button/space press."""
-        if not self.last_detection_valid or not self.camera_source:
+        if not self.camera_source:
+            return
+
+        if not self.last_detection_valid:
+            # Flash red border to indicate invalid capture attempt
+            self.video_label.setStyleSheet(f"""
+                QLabel {{
+                    background-color: #1a1a1a;
+                    border: 3px solid {COLORS['danger']};
+                    border-radius: 6px;
+                }}
+            """)
+            QTimer.singleShot(200, self._reset_video_border)
             return
 
         # Get current frame and detect again
