@@ -33,7 +33,7 @@ class CameraTableWidget(QTableWidget):
     camera_calibrate_requested = Signal(int)  # Emits row index when calibrate is clicked
 
     COLUMNS = ['#', 'Camera ID', 'Type', 'Camera Model', 'Mounting Position', 'IP Address', 'Intrinsic', 'Calibrate', 'Verify', 'Action']
-    COLUMN_WIDTHS = [40, 100, 60, 130, 180, 160, 70, 80, 70, 70]
+    COLUMN_WIDTHS = [40, 100, 60, 130, 180, 160, 70, 90, 80, 80]
 
     def __init__(self, parent=None):
         super().__init__(parent)

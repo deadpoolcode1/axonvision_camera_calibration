@@ -136,7 +136,7 @@ QPushButton#remove_button {{
     color: white;
     padding: 4px 8px;
     font-size: 11px;
-    min-width: 55px;
+    min-width: 60px;
 }}
 
 QPushButton#remove_button:hover {{
@@ -155,11 +155,10 @@ QTableWidget QPushButton#remove_button:hover {{
 QPushButton#verify_button {{
     background-color: {COLORS['warning']};
     color: {COLORS['text_dark']};
-    padding: 4px 6px;
+    padding: 4px 8px;
     font-size: 11px;
     font-weight: bold;
-    min-width: 55px;
-    max-width: 70px;
+    min-width: 60px;
 }}
 
 QPushButton#verify_button:hover {{
@@ -169,9 +168,8 @@ QPushButton#verify_button:hover {{
 QTableWidget QPushButton#verify_button {{
     background-color: {COLORS['warning']};
     color: {COLORS['text_dark']};
-    padding: 4px 6px;
-    min-width: 55px;
-    max-width: 70px;
+    padding: 4px 8px;
+    min-width: 60px;
 }}
 
 QTableWidget QPushButton#verify_button:hover {{
@@ -181,11 +179,10 @@ QTableWidget QPushButton#verify_button:hover {{
 QPushButton#calibrate_button {{
     background-color: {COLORS['primary']};
     color: white;
-    padding: 4px 6px;
+    padding: 4px 8px;
     font-size: 11px;
     font-weight: bold;
-    min-width: 60px;
-    max-width: 75px;
+    min-width: 70px;
 }}
 
 QPushButton#calibrate_button:hover {{
@@ -195,9 +192,8 @@ QPushButton#calibrate_button:hover {{
 QTableWidget QPushButton#calibrate_button {{
     background-color: {COLORS['primary']};
     color: white;
-    padding: 4px 6px;
-    min-width: 60px;
-    max-width: 75px;
+    padding: 4px 8px;
+    min-width: 70px;
 }}
 
 QTableWidget QPushButton#calibrate_button:hover {{
