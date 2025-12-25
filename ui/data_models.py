@@ -14,6 +14,7 @@ from typing import List, Optional, Dict, Any
 
 # Mounting position options
 MOUNTING_POSITIONS = [
+    "N/A",  # Default - must be changed before proceeding
     "Front Center",
     "Front Left",
     "Front Right",
@@ -28,8 +29,18 @@ MOUNTING_POSITIONS = [
     "Right Down",
 ]
 
+# 3:1 cameras can only be in these positions
+VALID_3_1_POSITIONS = ["Front Center", "Rear Center"]
+
 # Camera type options
-CAMERA_TYPES = ["1:1", "3:1"]
+CAMERA_TYPES = ["AI Central", "1:1", "3:1"]
+
+# Camera role options (only for 3:1 type)
+CAMERA_ROLES = ["Manager", "Worker"]
+
+# Maximum limits
+MAX_CAMERAS = 6
+MAX_AI_CENTRAL_CAMERAS = 1
 
 # Camera model options
 CAMERA_MODELS = ["IMX219", "IMX477", "IMX708", "OV5647", "Custom"]
@@ -42,11 +53,12 @@ PLATFORM_TYPES = ["Type A", "Type B", "Type C", "Custom"]
 class CameraDefinition:
     """Definition of a single camera in the system."""
     camera_number: int
-    camera_type: str = "1:1"  # 1:1 or 3:1
+    camera_type: str = "1:1"  # AI Central, 1:1, or 3:1
     camera_model: str = "IMX219"
-    mounting_position: str = "Front Center"
+    mounting_position: str = "N/A"  # Default to N/A - must be set
     ip_address: str = "192.168.1.100"
     camera_id: str = ""  # Will be auto-generated if empty
+    camera_role: str = ""  # Manager or Worker (only for 3:1 type)
 
     def __post_init__(self):
         if not self.camera_id:

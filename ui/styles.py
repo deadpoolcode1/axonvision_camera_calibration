@@ -30,7 +30,7 @@ QMainWindow {{
 
 QWidget {{
     font-family: 'Segoe UI', 'Arial', sans-serif;
-    font-size: 14px;
+    font-size: 16px;
     color: {COLORS['text_dark']};
 }}
 
@@ -39,31 +39,31 @@ QLabel {{
 }}
 
 QLabel#title {{
-    font-size: 32px;
+    font-size: 36px;
     font-weight: bold;
     color: {COLORS['primary']};
 }}
 
 QLabel#subtitle {{
-    font-size: 16px;
+    font-size: 18px;
     color: {COLORS['text_muted']};
 }}
 
 QLabel#section_header {{
-    font-size: 18px;
+    font-size: 20px;
     font-weight: bold;
     color: {COLORS['text_dark']};
     padding-top: 10px;
 }}
 
 QLabel#screen_indicator {{
-    font-size: 12px;
+    font-size: 14px;
     color: {COLORS['text_muted']};
     font-style: italic;
 }}
 
 QLabel#step_indicator {{
-    font-size: 12px;
+    font-size: 14px;
     color: {COLORS['text_muted']};
 }}
 
@@ -73,20 +73,24 @@ QLabel#version {{
 }}
 
 QPushButton {{
-    padding: 10px 20px;
+    padding: 12px 24px;
     border-radius: 6px;
-    font-size: 14px;
+    font-size: 16px;
     font-weight: 500;
     border: none;
+}}
+
+QPushButton:hover {{
+    opacity: 0.9;
 }}
 
 QPushButton#primary_button {{
     background-color: {COLORS['success']};
     color: white;
-    padding: 15px 40px;
-    font-size: 18px;
+    padding: 16px 44px;
+    font-size: 20px;
     font-weight: bold;
-    min-width: 300px;
+    min-width: 320px;
 }}
 
 QPushButton#primary_button:hover {{
@@ -97,14 +101,25 @@ QPushButton#secondary_button {{
     background-color: {COLORS['white']};
     color: {COLORS['primary']};
     border: 2px solid {COLORS['primary']};
-    padding: 15px 40px;
-    font-size: 16px;
+    padding: 16px 44px;
+    font-size: 18px;
     font-weight: 500;
-    min-width: 300px;
+    min-width: 320px;
 }}
 
 QPushButton#secondary_button:hover {{
     background-color: {COLORS['table_header']};
+}}
+
+QPushButton#refresh_button {{
+    background-color: {COLORS['primary']};
+    color: white;
+    padding: 10px 20px;
+    font-size: 14px;
+}}
+
+QPushButton#refresh_button:hover {{
+    background-color: {COLORS['primary_dark']};
 }}
 
 QPushButton#settings_button {{
@@ -316,6 +331,38 @@ QFrame#recent_item {{
 
 QFrame#recent_item:hover {{
     background-color: {COLORS['table_row_alt']};
+}}
+
+QToolTip {{
+    background-color: {COLORS['text_dark']};
+    color: {COLORS['white']};
+    border: none;
+    padding: 8px 12px;
+    border-radius: 4px;
+    font-size: 14px;
+}}
+
+QComboBox:hover {{
+    border-color: {COLORS['primary']};
+}}
+
+QLineEdit:hover {{
+    border-color: {COLORS['primary']};
+}}
+
+QTableWidget::item:hover {{
+    background-color: {COLORS['table_header']};
+}}
+
+/* Error state for duplicate locations */
+QComboBox#error_combo {{
+    border: 2px solid {COLORS['danger']};
+    background-color: #FFEBEE;
+}}
+
+QLabel#error_label {{
+    color: {COLORS['danger']};
+    font-weight: bold;
 }}
 """
 

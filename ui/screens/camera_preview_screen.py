@@ -1,21 +1,24 @@
 """
 Camera Preview Screen (Screen 3)
 
-Displays camera previews and allows mounting position adjustments:
-- Shows all configured cameras with live preview
-- Allows user to change mounting positions
-- Ping test for each camera on entry
-- Navigate back to Screen 2 if any camera fails connectivity
+Hardware verification and intrinsic calibration:
+- Shows all cameras with live preview and ping status
+- Read-only camera configuration table
+- Intrinsic calibration for each camera
+- Real-time LLA (Lat/Long/Alt) and Yaw/Pitch/Roll data display
+- Block progression if any camera missing intrinsic calibration
 """
 
 from pathlib import Path
 import subprocess
 import platform
+import random
 from typing import Optional
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QComboBox, QGridLayout, QSizePolicy, QMessageBox,
-    QScrollArea
+    QScrollArea, QTableWidget, QTableWidgetItem, QHeaderView,
+    QAbstractItemView
 )
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QPixmap, QImage
@@ -29,26 +32,155 @@ from ..data_models import PlatformConfiguration, MOUNTING_POSITIONS
 # Import camera streaming from intrinsic_calibration module
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from intrinsic_calibration import NetworkCameraSource
+try:
+    from intrinsic_calibration import NetworkCameraSource
+except ImportError:
+    NetworkCameraSource = None
+
+from ..dialogs import IntrinsicCalibrationDialog
+
+
+class SensorDataWidget(QFrame):
+    """Widget displaying real-time LLA and YPR sensor data."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.timer = QTimer()
+        self.timer.timeout.connect(self._update_data)
+        self._setup_ui()
+
+    def _setup_ui(self):
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {COLORS['white']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 8px;
+                padding: 10px;
+            }}
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        # Header
+        header = QLabel("Real-Time Sensor Data")
+        header.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {COLORS['primary']};")
+        layout.addWidget(header)
+
+        # LLA Section
+        lla_frame = QFrame()
+        lla_frame.setStyleSheet("border: none;")
+        lla_layout = QGridLayout(lla_frame)
+        lla_layout.setSpacing(8)
+
+        lla_label = QLabel("Position (LLA)")
+        lla_label.setStyleSheet(f"font-weight: bold; color: {COLORS['text_dark']};")
+        lla_layout.addWidget(lla_label, 0, 0, 1, 2)
+
+        lla_layout.addWidget(QLabel("Latitude:"), 1, 0)
+        self.lat_value = QLabel("---.------°")
+        self.lat_value.setStyleSheet(f"font-family: monospace; color: {COLORS['primary']};")
+        lla_layout.addWidget(self.lat_value, 1, 1)
+
+        lla_layout.addWidget(QLabel("Longitude:"), 2, 0)
+        self.lon_value = QLabel("---.------°")
+        self.lon_value.setStyleSheet(f"font-family: monospace; color: {COLORS['primary']};")
+        lla_layout.addWidget(self.lon_value, 2, 1)
+
+        lla_layout.addWidget(QLabel("Altitude:"), 3, 0)
+        self.alt_value = QLabel("----.-- m")
+        self.alt_value.setStyleSheet(f"font-family: monospace; color: {COLORS['primary']};")
+        lla_layout.addWidget(self.alt_value, 3, 1)
+
+        layout.addWidget(lla_frame)
+
+        # Separator
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet(f"background-color: {COLORS['border']};")
+        layout.addWidget(sep)
+
+        # YPR Section
+        ypr_frame = QFrame()
+        ypr_frame.setStyleSheet("border: none;")
+        ypr_layout = QGridLayout(ypr_frame)
+        ypr_layout.setSpacing(8)
+
+        ypr_label = QLabel("Orientation (YPR)")
+        ypr_label.setStyleSheet(f"font-weight: bold; color: {COLORS['text_dark']};")
+        ypr_layout.addWidget(ypr_label, 0, 0, 1, 2)
+
+        ypr_layout.addWidget(QLabel("Yaw:"), 1, 0)
+        self.yaw_value = QLabel("---.--°")
+        self.yaw_value.setStyleSheet(f"font-family: monospace; color: {COLORS['primary']};")
+        ypr_layout.addWidget(self.yaw_value, 1, 1)
+
+        ypr_layout.addWidget(QLabel("Pitch:"), 2, 0)
+        self.pitch_value = QLabel("---.--°")
+        self.pitch_value.setStyleSheet(f"font-family: monospace; color: {COLORS['primary']};")
+        ypr_layout.addWidget(self.pitch_value, 2, 1)
+
+        ypr_layout.addWidget(QLabel("Roll:"), 3, 0)
+        self.roll_value = QLabel("---.--°")
+        self.roll_value.setStyleSheet(f"font-family: monospace; color: {COLORS['primary']};")
+        ypr_layout.addWidget(self.roll_value, 3, 1)
+
+        layout.addWidget(ypr_frame)
+
+        # Status
+        self.status_label = QLabel("⚪ Waiting for data...")
+        self.status_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-style: italic;")
+        layout.addWidget(self.status_label)
+
+        layout.addStretch()
+
+    def start_updates(self):
+        """Start updating sensor data."""
+        self.timer.start(100)  # 10 Hz update
+        self.status_label.setText("🟢 Receiving data")
+        self.status_label.setStyleSheet(f"color: {COLORS['success']};")
+
+    def stop_updates(self):
+        """Stop updating sensor data."""
+        self.timer.stop()
+        self.status_label.setText("⚪ Stopped")
+        self.status_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-style: italic;")
+
+    def _update_data(self):
+        """Update sensor values with simulated data (replace with real INS data)."""
+        # Simulated data - in production, this would read from INS
+        lat = 37.7749 + random.uniform(-0.0001, 0.0001)
+        lon = -122.4194 + random.uniform(-0.0001, 0.0001)
+        alt = 10.5 + random.uniform(-0.1, 0.1)
+
+        yaw = random.uniform(0, 360)
+        pitch = random.uniform(-5, 5)
+        roll = random.uniform(-3, 3)
+
+        self.lat_value.setText(f"{lat:011.6f}°")
+        self.lon_value.setText(f"{lon:012.6f}°")
+        self.alt_value.setText(f"{alt:07.2f} m")
+
+        self.yaw_value.setText(f"{yaw:06.2f}°")
+        self.pitch_value.setText(f"{pitch:+06.2f}°")
+        self.roll_value.setText(f"{roll:+06.2f}°")
 
 
 class CameraPreviewCard(QFrame):
-    """
-    A card widget displaying a single camera preview with mounting position selector.
-    """
+    """A card widget displaying a single camera preview with status."""
 
-    mounting_position_changed = Signal(int, str)  # camera_number, new_position
+    calibrate_requested = Signal(int)  # camera_number
 
     def __init__(self, camera_number: int, camera_id: str, ip_address: str,
-                 mounting_position: str, parent=None):
+                 mounting_position: str, has_intrinsic: bool, parent=None):
         super().__init__(parent)
         self.camera_number = camera_number
         self.camera_id = camera_id
         self.ip_address = ip_address
         self.mounting_position = mounting_position
-        self.ping_status = None  # None = not tested, True = ok, False = failed
+        self.has_intrinsic = has_intrinsic
+        self.ping_status = None
 
-        # Camera streaming components
         self.camera_source: Optional[NetworkCameraSource] = None
         self.timer = QTimer()
         self.timer.timeout.connect(self._update_frame)
@@ -57,7 +189,6 @@ class CameraPreviewCard(QFrame):
         self._setup_ui()
 
     def _setup_ui(self):
-        """Setup the card UI."""
         self.setObjectName("card")
         self.setFrameShape(QFrame.StyledPanel)
         self.setStyleSheet(f"""
@@ -70,9 +201,9 @@ class CameraPreviewCard(QFrame):
         """)
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(10)
+        layout.setSpacing(8)
 
-        # Header with camera info
+        # Header with camera info and status
         header_layout = QHBoxLayout()
 
         camera_label = QLabel(f"Camera {self.camera_number}")
@@ -93,12 +224,16 @@ class CameraPreviewCard(QFrame):
 
         layout.addLayout(header_layout)
 
-        # Camera ID and IP
+        # Camera ID, IP, and Position info
         info_label = QLabel(f"ID: {self.camera_id}  |  IP: {self.ip_address}")
         info_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 12px;")
         layout.addWidget(info_label)
 
-        # Preview area - QLabel for live video display
+        pos_label = QLabel(f"Position: {self.mounting_position}")
+        pos_label.setStyleSheet(f"color: {COLORS['text_dark']}; font-size: 13px; font-weight: bold;")
+        layout.addWidget(pos_label)
+
+        # Preview area
         self.video_label = QLabel()
         self.video_label.setFixedSize(280, 180)
         self.video_label.setAlignment(Qt.AlignCenter)
@@ -110,24 +245,24 @@ class CameraPreviewCard(QFrame):
             font-size: 12px;
         """)
         self.video_label.setText("Connecting...")
-
         layout.addWidget(self.video_label, alignment=Qt.AlignCenter)
 
-        # Mounting Position selector
-        position_layout = QHBoxLayout()
-        position_label = QLabel("Mounting Position:")
-        position_label.setStyleSheet(f"font-weight: bold;")
-        position_layout.addWidget(position_label)
+        # Intrinsic calibration status and button
+        intrinsic_layout = QHBoxLayout()
 
-        self.position_combo = QComboBox()
-        self.position_combo.addItems(MOUNTING_POSITIONS)
-        self.position_combo.setCurrentText(self.mounting_position)
-        self.position_combo.currentTextChanged.connect(self._on_position_changed)
-        self.position_combo.setMinimumWidth(150)
-        position_layout.addWidget(self.position_combo)
+        self.intrinsic_status = QLabel()
+        self._update_intrinsic_display()
+        intrinsic_layout.addWidget(self.intrinsic_status)
 
-        position_layout.addStretch()
-        layout.addLayout(position_layout)
+        intrinsic_layout.addStretch()
+
+        self.calibrate_btn = QPushButton("Calibrate Intrinsic")
+        self.calibrate_btn.setObjectName("calibrate_button")
+        self.calibrate_btn.setToolTip("Run intrinsic calibration for this camera")
+        self.calibrate_btn.clicked.connect(lambda: self.calibrate_requested.emit(self.camera_number))
+        intrinsic_layout.addWidget(self.calibrate_btn)
+
+        layout.addLayout(intrinsic_layout)
 
     def _update_status_display(self):
         """Update the ping status display."""
@@ -139,7 +274,7 @@ class CameraPreviewCard(QFrame):
                 padding: 4px 8px;
             """)
         elif self.ping_status:
-            self.status_label.setText("\u2713 Connected")
+            self.status_label.setText("✓ Connected")
             self.status_label.setStyleSheet(f"""
                 color: {COLORS['success']};
                 font-weight: bold;
@@ -149,7 +284,7 @@ class CameraPreviewCard(QFrame):
                 border-radius: 4px;
             """)
         else:
-            self.status_label.setText("\u2717 Not Detected")
+            self.status_label.setText("✗ Not Detected")
             self.status_label.setStyleSheet(f"""
                 color: {COLORS['danger']};
                 font-weight: bold;
@@ -159,31 +294,42 @@ class CameraPreviewCard(QFrame):
                 border-radius: 4px;
             """)
 
+    def _update_intrinsic_display(self):
+        """Update the intrinsic calibration status display."""
+        if self.has_intrinsic:
+            self.intrinsic_status.setText("✓ Intrinsic Calibrated")
+            self.intrinsic_status.setStyleSheet(f"""
+                color: {COLORS['success']};
+                font-weight: bold;
+                font-size: 13px;
+            """)
+        else:
+            self.intrinsic_status.setText("✗ Needs Calibration")
+            self.intrinsic_status.setStyleSheet(f"""
+                color: {COLORS['danger']};
+                font-weight: bold;
+                font-size: 13px;
+            """)
+
     def set_ping_status(self, status: bool):
         """Set the ping status and update display."""
         self.ping_status = status
         self._update_status_display()
 
-    def _on_position_changed(self, new_position: str):
-        """Handle mounting position change."""
-        self.mounting_position = new_position
-        self.mounting_position_changed.emit(self.camera_number, new_position)
-
-    def get_mounting_position(self) -> str:
-        """Get current mounting position."""
-        return self.position_combo.currentText()
+    def set_intrinsic_status(self, has_intrinsic: bool):
+        """Set the intrinsic calibration status."""
+        self.has_intrinsic = has_intrinsic
+        self._update_intrinsic_display()
 
     def start_streaming(self):
         """Start camera streaming."""
-        if self._is_streaming:
+        if self._is_streaming or NetworkCameraSource is None:
             return
-
         if not self.ip_address:
             self.video_label.setText("No IP address")
             return
 
         self.video_label.setText("Connecting...")
-
         try:
             self.camera_source = NetworkCameraSource(
                 ip=self.ip_address,
@@ -192,7 +338,6 @@ class CameraPreviewCard(QFrame):
                 stream_port=5010,
                 timeout=10.0
             )
-
             if self.camera_source.connect():
                 self._is_streaming = True
                 self.timer.start(33)  # ~30 FPS
@@ -213,7 +358,6 @@ class CameraPreviewCard(QFrame):
         """Stop camera streaming."""
         self.timer.stop()
         self._is_streaming = False
-
         if self.camera_source:
             self.camera_source.release()
             self.camera_source = None
@@ -222,36 +366,22 @@ class CameraPreviewCard(QFrame):
         """Update video frame from camera."""
         if not self.camera_source:
             return
-
         frame = self.camera_source.get_image()
         if frame is not None:
             self._display_frame(frame)
 
     def _display_frame(self, frame: np.ndarray):
         """Convert OpenCV frame to QPixmap and display."""
-        # Convert BGR to RGB
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-        # Scale frame to fit label (280x180)
         h, w = rgb_frame.shape[:2]
         target_w, target_h = 280, 180
-
-        scale_w = target_w / w
-        scale_h = target_h / h
-        scale = min(scale_w, scale_h)
-
-        new_w = int(w * scale)
-        new_h = int(h * scale)
+        scale = min(target_w/w, target_h/h)
+        new_w, new_h = int(w*scale), int(h*scale)
         rgb_frame = cv2.resize(rgb_frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
         h, w = rgb_frame.shape[:2]
-
-        # Create QImage
         bytes_per_line = 3 * w
         q_image = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
-
-        # Display
-        pixmap = QPixmap.fromImage(q_image)
-        self.video_label.setPixmap(pixmap)
+        self.video_label.setPixmap(QPixmap.fromImage(q_image))
 
 
 class CameraPreviewScreen(QWidget):
@@ -259,12 +389,12 @@ class CameraPreviewScreen(QWidget):
     Camera Preview Screen
 
     Step 2 of 6 in the calibration workflow (Hardware Verification).
-    Displays camera previews and allows mounting position adjustment.
+    Displays camera previews, read-only config table, intrinsic calibration,
+    and real-time sensor data.
     """
 
-    # Signals
-    cancel_requested = Signal()  # Go back to Screen 2
-    next_requested = Signal(PlatformConfiguration)  # Proceed to next step
+    cancel_requested = Signal()
+    next_requested = Signal(PlatformConfiguration)
 
     def __init__(self, config: PlatformConfiguration = None, parent=None):
         super().__init__(parent)
@@ -272,24 +402,22 @@ class CameraPreviewScreen(QWidget):
         self.base_path = "."
         self.camera_cards = []
         self.ping_failed_cameras = []
-
         self._setup_ui()
 
     def _setup_ui(self):
-        """Setup the main UI layout."""
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(40, 20, 40, 20)
-        main_layout.setSpacing(20)
+        main_layout.setSpacing(15)
 
         # Header
         header_layout = QVBoxLayout()
         header_layout.setSpacing(5)
 
-        screen_label = QLabel("Screen 3: Camera Preview")
+        screen_label = QLabel("Screen 3: Hardware Verification")
         screen_label.setObjectName("screen_indicator")
         header_layout.addWidget(screen_label)
 
-        title = QLabel("Hardware Verification")
+        title = QLabel("Camera Verification & Intrinsic Calibration")
         title.setObjectName("title")
         header_layout.addWidget(title)
 
@@ -315,41 +443,86 @@ class CameraPreviewScreen(QWidget):
         status_layout.addWidget(self.status_icon)
 
         self.status_message = QLabel("Testing camera connectivity...")
-        self.status_message.setStyleSheet(f"font-size: 14px;")
+        self.status_message.setStyleSheet("font-size: 14px;")
         status_layout.addWidget(self.status_message, 1)
 
         main_layout.addWidget(self.status_frame)
 
-        # Instructions
+        # Main content with camera table and sensor data side panel
+        content_layout = QHBoxLayout()
+
+        # Left side - Camera table (read-only)
+        left_panel = QFrame()
+        left_panel.setObjectName("card")
+        left_layout = QVBoxLayout(left_panel)
+
+        table_header = QLabel("Camera Configuration (Read-Only)")
+        table_header.setObjectName("section_header")
+        left_layout.addWidget(table_header)
+
+        self.config_table = QTableWidget()
+        self._setup_config_table()
+        left_layout.addWidget(self.config_table)
+
+        content_layout.addWidget(left_panel, 2)
+
+        # Right side - Sensor data
+        self.sensor_widget = SensorDataWidget()
+        self.sensor_widget.setFixedWidth(250)
+        content_layout.addWidget(self.sensor_widget)
+
+        main_layout.addLayout(content_layout)
+
+        # Camera previews section
+        preview_frame = QFrame()
+        preview_frame.setObjectName("card")
+        preview_layout = QVBoxLayout(preview_frame)
+
+        preview_header_row = QHBoxLayout()
+        preview_header = QLabel("Camera Previews & Intrinsic Calibration")
+        preview_header.setObjectName("section_header")
+        preview_header_row.addWidget(preview_header)
+        preview_header_row.addStretch()
+
+        self.refresh_btn = QPushButton("↻ Refresh")
+        self.refresh_btn.setObjectName("refresh_button")
+        self.refresh_btn.setToolTip("Re-test camera connectivity")
+        self.refresh_btn.clicked.connect(self.verify_cameras)
+        preview_header_row.addWidget(self.refresh_btn)
+
+        preview_layout.addLayout(preview_header_row)
+
         instructions = QLabel(
-            "Review camera configuration and adjust mounting positions if needed. "
-            "All cameras must be connected to proceed."
+            "All cameras must have intrinsic calibration completed before proceeding. "
+            "Click 'Calibrate Intrinsic' on cameras marked as needing calibration."
         )
         instructions.setWordWrap(True)
         instructions.setStyleSheet(f"color: {COLORS['text_muted']}; font-style: italic;")
-        main_layout.addWidget(instructions)
+        preview_layout.addWidget(instructions)
 
-        # Scrollable camera grid area
+        # Scrollable camera grid
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setFrameShape(QFrame.NoFrame)
-        scroll_area.setStyleSheet("background-color: transparent;")
+        scroll_area.setMinimumHeight(300)
 
         self.cameras_container = QWidget()
         self.cameras_layout = QGridLayout(self.cameras_container)
-        self.cameras_layout.setSpacing(20)
+        self.cameras_layout.setSpacing(15)
         self.cameras_layout.setAlignment(Qt.AlignTop | Qt.AlignLeft)
 
         scroll_area.setWidget(self.cameras_container)
-        main_layout.addWidget(scroll_area, 1)
+        preview_layout.addWidget(scroll_area, 1)
+
+        main_layout.addWidget(preview_frame, 1)
 
         # Bottom navigation bar
         nav_layout = QHBoxLayout()
 
         self.cancel_btn = QPushButton("< Back to Configuration")
         self.cancel_btn.setObjectName("cancel_button")
+        self.cancel_btn.setToolTip("Return to platform configuration")
         self.cancel_btn.clicked.connect(self._on_cancel_clicked)
-        # Prevent space key from triggering when focused
         self.cancel_btn.setFocusPolicy(Qt.NoFocus)
         nav_layout.addWidget(self.cancel_btn)
 
@@ -357,17 +530,88 @@ class CameraPreviewScreen(QWidget):
 
         self.next_btn = QPushButton("Next: Extrinsic Calibration >")
         self.next_btn.setObjectName("nav_button")
+        self.next_btn.setToolTip("Proceed to extrinsic calibration (requires all intrinsics)")
         self.next_btn.clicked.connect(self._on_next_clicked)
-        self.next_btn.setEnabled(False)  # Disabled until all cameras verified
-        # Prevent space key from triggering when focused
+        self.next_btn.setEnabled(False)
         self.next_btn.setFocusPolicy(Qt.NoFocus)
         nav_layout.addWidget(self.next_btn)
 
         main_layout.addLayout(nav_layout)
 
+    def _setup_config_table(self):
+        """Setup the read-only configuration table."""
+        columns = ['#', 'Camera ID', 'Type', 'Role', 'Model', 'Position', 'IP Address', 'Intrinsic']
+        self.config_table.setColumnCount(len(columns))
+        self.config_table.setHorizontalHeaderLabels(columns)
+
+        header = self.config_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Fixed)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.Fixed)
+        header.setSectionResizeMode(3, QHeaderView.Fixed)
+        header.setSectionResizeMode(4, QHeaderView.Fixed)
+        header.setSectionResizeMode(5, QHeaderView.Stretch)
+        header.setSectionResizeMode(6, QHeaderView.Stretch)
+        header.setSectionResizeMode(7, QHeaderView.Fixed)
+
+        self.config_table.setColumnWidth(0, 40)
+        self.config_table.setColumnWidth(2, 80)
+        self.config_table.setColumnWidth(3, 70)
+        self.config_table.setColumnWidth(4, 90)
+        self.config_table.setColumnWidth(7, 80)
+
+        self.config_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.config_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.config_table.verticalHeader().setVisible(False)
+        self.config_table.setAlternatingRowColors(True)
+
+    def _populate_config_table(self):
+        """Populate the configuration table with camera data."""
+        self.config_table.setRowCount(0)
+
+        for camera in self.config.cameras:
+            row = self.config_table.rowCount()
+            self.config_table.insertRow(row)
+
+            # Camera number
+            num_item = QTableWidgetItem(str(camera.camera_number))
+            num_item.setTextAlignment(Qt.AlignCenter)
+            self.config_table.setItem(row, 0, num_item)
+
+            # Camera ID
+            self.config_table.setItem(row, 1, QTableWidgetItem(camera.camera_id))
+
+            # Type
+            self.config_table.setItem(row, 2, QTableWidgetItem(camera.camera_type))
+
+            # Role
+            self.config_table.setItem(row, 3, QTableWidgetItem(camera.camera_role or "-"))
+
+            # Model
+            self.config_table.setItem(row, 4, QTableWidgetItem(camera.camera_model))
+
+            # Position
+            self.config_table.setItem(row, 5, QTableWidgetItem(camera.mounting_position))
+
+            # IP Address
+            self.config_table.setItem(row, 6, QTableWidgetItem(camera.ip_address))
+
+            # Intrinsic status
+            has_intrinsic = camera.has_intrinsic_calibration(self.base_path)
+            status_item = QTableWidgetItem("✓" if has_intrinsic else "✗")
+            status_item.setTextAlignment(Qt.AlignCenter)
+            if has_intrinsic:
+                status_item.setForeground(Qt.darkGreen)
+            else:
+                status_item.setForeground(Qt.red)
+            self.config_table.setItem(row, 7, status_item)
+
+            self.config_table.setRowHeight(row, 35)
+
     def set_config(self, config: PlatformConfiguration):
         """Set a new configuration and update UI."""
         self.config = config
+        self._populate_config_table()
         self._rebuild_camera_grid()
 
     def set_base_path(self, path: str):
@@ -378,6 +622,7 @@ class CameraPreviewScreen(QWidget):
         """Rebuild the camera preview grid from configuration."""
         # Clear existing cards
         for card in self.camera_cards:
+            card.stop_streaming()
             card.deleteLater()
         self.camera_cards.clear()
 
@@ -390,17 +635,19 @@ class CameraPreviewScreen(QWidget):
         # Create camera cards
         row = 0
         col = 0
-        max_cols = 2  # 2 cameras per row
+        max_cols = 2
 
         for camera in self.config.cameras:
+            has_intrinsic = camera.has_intrinsic_calibration(self.base_path)
             card = CameraPreviewCard(
                 camera_number=camera.camera_number,
                 camera_id=camera.camera_id,
                 ip_address=camera.ip_address,
                 mounting_position=camera.mounting_position,
+                has_intrinsic=has_intrinsic,
                 parent=self
             )
-            card.mounting_position_changed.connect(self._on_mounting_position_changed)
+            card.calibrate_requested.connect(self._on_calibrate_requested)
             self.camera_cards.append(card)
             self.cameras_layout.addWidget(card, row, col)
 
@@ -409,48 +656,57 @@ class CameraPreviewScreen(QWidget):
                 col = 0
                 row += 1
 
-        # Add stretch to push cards to top-left
         self.cameras_layout.setRowStretch(row + 1, 1)
         self.cameras_layout.setColumnStretch(max_cols, 1)
 
     def verify_cameras(self):
-        """
-        Verify all cameras are reachable via ping.
-        Called when entering this screen.
-        """
+        """Verify all cameras are reachable and check intrinsic status."""
         self.ping_failed_cameras.clear()
         self.next_btn.setEnabled(False)
 
-        # Update status to testing
         self._update_status("testing", "Testing camera connectivity...")
 
         # Test each camera
-        all_passed = True
+        all_connected = True
+        all_calibrated = True
+
         for card in self.camera_cards:
             ping_ok = self._ping_device(card.ip_address)
             card.set_ping_status(ping_ok)
 
             if not ping_ok:
-                all_passed = False
+                all_connected = False
                 self.ping_failed_cameras.append(card.camera_id)
 
-        # Update status and enable/disable next button
-        if all_passed:
-            self._update_status("success", "All cameras connected and ready!")
-            self.next_btn.setEnabled(True)
-        else:
+            # Check intrinsic calibration
+            camera = next((c for c in self.config.cameras if c.camera_number == card.camera_number), None)
+            if camera:
+                has_intrinsic = camera.has_intrinsic_calibration(self.base_path)
+                card.set_intrinsic_status(has_intrinsic)
+                if not has_intrinsic:
+                    all_calibrated = False
+
+        # Update table intrinsic status
+        self._populate_config_table()
+
+        # Update status message
+        if not all_connected:
             failed_list = ", ".join(self.ping_failed_cameras)
             self._update_status(
                 "error",
-                f"Camera(s) not detected: {failed_list}. "
-                "Please check connections and go back to verify configuration."
+                f"Camera(s) not detected: {failed_list}. Check connections."
             )
-            self.next_btn.setEnabled(False)
-
-            # Show warning dialog
             self._show_camera_failure_dialog()
+        elif not all_calibrated:
+            self._update_status(
+                "warning",
+                "Some cameras need intrinsic calibration. Complete calibration to proceed."
+            )
+        else:
+            self._update_status("success", "All cameras connected and calibrated!")
+            self.next_btn.setEnabled(True)
 
-        # Start video streaming for cameras that passed ping
+        # Start video streaming for connected cameras
         self.start_all_streams()
 
     def _ping_device(self, ip_address: str) -> bool:
@@ -459,11 +715,9 @@ class CameraPreviewScreen(QWidget):
             return False
 
         try:
-            # Determine ping command based on OS
             param = '-n' if platform.system().lower() == 'windows' else '-c'
             timeout_param = '-w' if platform.system().lower() == 'windows' else '-W'
 
-            # Run ping with 1 packet and 2 second timeout
             result = subprocess.run(
                 ['ping', param, '1', timeout_param, '2', ip_address],
                 stdout=subprocess.DEVNULL,
@@ -478,33 +732,27 @@ class CameraPreviewScreen(QWidget):
         """Update the status message area."""
         if status_type == "testing":
             self.status_frame.setStyleSheet(f"""
-                QFrame {{
-                    background-color: {COLORS['table_header']};
-                    border-radius: 6px;
-                    padding: 10px;
-                }}
+                QFrame {{ background-color: {COLORS['table_header']}; border-radius: 6px; padding: 10px; }}
             """)
-            self.status_icon.setText("\u23F3")  # Hourglass
-            self.status_icon.setStyleSheet(f"font-size: 20px;")
+            self.status_icon.setText("⏳")
+            self.status_icon.setStyleSheet("font-size: 20px;")
         elif status_type == "success":
             self.status_frame.setStyleSheet(f"""
-                QFrame {{
-                    background-color: #E8F5E9;
-                    border-radius: 6px;
-                    padding: 10px;
-                }}
+                QFrame {{ background-color: #E8F5E9; border-radius: 6px; padding: 10px; }}
             """)
-            self.status_icon.setText("\u2713")
+            self.status_icon.setText("✓")
             self.status_icon.setStyleSheet(f"font-size: 20px; color: {COLORS['success']};")
+        elif status_type == "warning":
+            self.status_frame.setStyleSheet(f"""
+                QFrame {{ background-color: #FFF8E1; border-radius: 6px; padding: 10px; }}
+            """)
+            self.status_icon.setText("⚠")
+            self.status_icon.setStyleSheet(f"font-size: 20px; color: {COLORS['warning']};")
         elif status_type == "error":
             self.status_frame.setStyleSheet(f"""
-                QFrame {{
-                    background-color: #FFEBEE;
-                    border-radius: 6px;
-                    padding: 10px;
-                }}
+                QFrame {{ background-color: #FFEBEE; border-radius: 6px; padding: 10px; }}
             """)
-            self.status_icon.setText("\u2717")
+            self.status_icon.setText("✗")
             self.status_icon.setStyleSheet(f"font-size: 20px; color: {COLORS['danger']};")
 
         self.status_message.setText(message)
@@ -521,58 +769,123 @@ class CameraPreviewScreen(QWidget):
             "  1. Camera is powered on\n"
             "  2. Network cable is connected\n"
             "  3. IP address is correct\n\n"
-            "Go back to the configuration screen to verify settings."
+            "Go back to configuration if you need to change settings."
         )
 
-    def _on_mounting_position_changed(self, camera_number: int, new_position: str):
-        """Handle mounting position change for a camera."""
-        # Update the configuration
-        for camera in self.config.cameras:
-            if camera.camera_number == camera_number:
-                camera.mounting_position = new_position
-                break
+    def _on_calibrate_requested(self, camera_number: int):
+        """Handle intrinsic calibration request for a camera."""
+        camera = next((c for c in self.config.cameras if c.camera_number == camera_number), None)
+        if not camera:
+            return
+
+        # Check if already calibrated
+        intrinsic_path = Path(self.base_path) / f"camera_intrinsic/camera_intrinsics_{camera.camera_id}.json"
+        if intrinsic_path.exists():
+            reply = QMessageBox.question(
+                self,
+                "Existing Calibration Found",
+                f"Camera '{camera.camera_id}' already has an intrinsic calibration file.\n\n"
+                "Do you want to perform a new calibration?\n"
+                "(This will overwrite the existing calibration)",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+
+        # Stop streaming for this camera during calibration
+        card = next((c for c in self.camera_cards if c.camera_number == camera_number), None)
+        if card:
+            card.stop_streaming()
+
+        # Launch calibration dialog
+        dialog = IntrinsicCalibrationDialog(
+            camera_id=camera.camera_id,
+            ip_address=camera.ip_address,
+            base_path=self.base_path,
+            parent=self
+        )
+
+        dialog.calibration_completed.connect(
+            lambda success, msg: self._on_calibration_completed(camera_number, success, msg)
+        )
+
+        dialog.exec()
+
+    def _on_calibration_completed(self, camera_number: int, success: bool, message: str):
+        """Handle calibration completion."""
+        if success:
+            # Update intrinsic status
+            camera = next((c for c in self.config.cameras if c.camera_number == camera_number), None)
+            if camera:
+                has_intrinsic = camera.has_intrinsic_calibration(self.base_path)
+                card = next((c for c in self.camera_cards if c.camera_number == camera_number), None)
+                if card:
+                    card.set_intrinsic_status(has_intrinsic)
+
+            # Update table
+            self._populate_config_table()
+
+            # Check if all cameras now have intrinsics
+            all_calibrated = all(
+                c.has_intrinsic_calibration(self.base_path) for c in self.config.cameras
+            )
+            if all_calibrated and not self.ping_failed_cameras:
+                self._update_status("success", "All cameras connected and calibrated!")
+                self.next_btn.setEnabled(True)
+            else:
+                self._update_status(
+                    "warning",
+                    "Some cameras still need intrinsic calibration."
+                )
+
+        # Restart streaming
+        card = next((c for c in self.camera_cards if c.camera_number == camera_number), None)
+        if card:
+            card.start_streaming()
 
     def _on_cancel_clicked(self):
         """Handle Cancel/Back button click."""
         self.stop_all_streams()
+        self.sensor_widget.stop_updates()
         self.cancel_requested.emit()
 
     def _on_next_clicked(self):
         """Handle Next button click."""
-        # Stop streams before navigating
+        # Verify all intrinsics are present
+        missing_intrinsics = [
+            c.camera_id for c in self.config.cameras
+            if not c.has_intrinsic_calibration(self.base_path)
+        ]
+
+        if missing_intrinsics:
+            QMessageBox.warning(
+                self,
+                "Intrinsic Calibration Required",
+                f"The following cameras are missing intrinsic calibration:\n\n"
+                + "\n".join(f"  - {cam_id}" for cam_id in missing_intrinsics) +
+                "\n\nPlease complete intrinsic calibration for all cameras before proceeding."
+            )
+            return
+
         self.stop_all_streams()
+        self.sensor_widget.stop_updates()
 
-        # Update config with any mounting position changes
-        self._update_config_from_ui()
-
-        # For now, show info about next steps since screen 4 doesn't exist yet
         QMessageBox.information(
             self,
             "Next Step: Extrinsic Calibration",
             f"Platform: {self.config.platform_type} - {self.config.platform_id}\n"
             f"Cameras verified: {len(self.config.cameras)}\n\n"
-            "Next step will be Extrinsic Calibration.\n\n"
-            "This screen is coming soon:\n"
-            "- Step 3: Extrinsic Calibration\n"
-            "- Step 4: Validation\n"
-            "- Step 5: Report Generation"
+            "All cameras have intrinsic calibration.\n"
+            "Proceeding to extrinsic calibration."
         )
 
-        # Emit signal with updated config
         self.next_requested.emit(self.config)
-
-    def _update_config_from_ui(self):
-        """Update the configuration from current UI state."""
-        for card in self.camera_cards:
-            for camera in self.config.cameras:
-                if camera.camera_number == card.camera_number:
-                    camera.mounting_position = card.get_mounting_position()
-                    break
 
     def start_all_streams(self):
         """Start video streaming for all camera cards that passed ping."""
         for card in self.camera_cards:
-            if card.ping_status:  # Only start if ping passed
+            if card.ping_status:
                 card.start_streaming()
 
     def stop_all_streams(self):
@@ -580,7 +893,13 @@ class CameraPreviewScreen(QWidget):
         for card in self.camera_cards:
             card.stop_streaming()
 
+    def showEvent(self, event):
+        """Start sensor updates and verify cameras when screen is shown."""
+        super().showEvent(event)
+        self.sensor_widget.start_updates()
+
     def hideEvent(self, event):
-        """Stop all streams when screen is hidden."""
+        """Stop all streams and sensor updates when screen is hidden."""
         self.stop_all_streams()
+        self.sensor_widget.stop_updates()
         super().hideEvent(event)
