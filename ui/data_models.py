@@ -12,8 +12,9 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any
 
 
-# Mounting position options
+# Mounting position options (NA is first for default selection)
 MOUNTING_POSITIONS = [
+    "NA",  # Default - must be changed before proceeding
     "Front Center",
     "Front Left",
     "Front Right",
@@ -28,8 +29,17 @@ MOUNTING_POSITIONS = [
     "Right Down",
 ]
 
+# Valid positions for 3:1 cameras (manager/worker)
+VALID_3_1_POSITIONS = ["Front Center", "Rear Center"]
+
 # Camera type options
-CAMERA_TYPES = ["1:1", "3:1"]
+CAMERA_TYPES = ["AI CENTRAL", "1:1", "3:1 manager", "3:1 worker"]
+
+# Maximum cameras allowed
+MAX_CAMERAS = 6
+
+# Maximum AI Central cameras allowed
+MAX_AI_CENTRAL = 1
 
 # Camera model options
 CAMERA_MODELS = ["IMX219", "IMX477", "IMX708", "OV5647", "Custom"]
@@ -42,9 +52,9 @@ PLATFORM_TYPES = ["Type A", "Type B", "Type C", "Custom"]
 class CameraDefinition:
     """Definition of a single camera in the system."""
     camera_number: int
-    camera_type: str = "1:1"  # 1:1 or 3:1
+    camera_type: str = "AI CENTRAL"  # AI CENTRAL, 1:1, 3:1 manager, 3:1 worker
     camera_model: str = "IMX219"
-    mounting_position: str = "Front Center"
+    mounting_position: str = "NA"  # Default to NA - must be selected
     ip_address: str = "192.168.1.100"
     camera_id: str = ""  # Will be auto-generated if empty
 
@@ -96,6 +106,111 @@ class PlatformConfiguration:
             # Re-number remaining cameras
             for i, cam in enumerate(self.cameras):
                 cam.camera_number = i + 1
+
+    def can_add_camera(self) -> tuple:
+        """
+        Check if a new camera can be added.
+
+        Returns:
+            Tuple of (can_add: bool, reason: str)
+        """
+        if len(self.cameras) >= MAX_CAMERAS:
+            return False, f"Maximum of {MAX_CAMERAS} cameras allowed"
+        return True, ""
+
+    def can_add_camera_type(self, camera_type: str) -> tuple:
+        """
+        Check if a specific camera type can be added.
+
+        Returns:
+            Tuple of (can_add: bool, reason: str)
+        """
+        can_add, reason = self.can_add_camera()
+        if not can_add:
+            return can_add, reason
+
+        if camera_type == "AI CENTRAL":
+            ai_central_count = sum(1 for c in self.cameras if c.camera_type == "AI CENTRAL")
+            if ai_central_count >= MAX_AI_CENTRAL:
+                return False, f"Only {MAX_AI_CENTRAL} AI CENTRAL camera is allowed"
+
+        return True, ""
+
+    def get_duplicate_positions(self) -> List[str]:
+        """
+        Get list of duplicate mounting positions.
+
+        Returns:
+            List of position names that are duplicated (excluding NA)
+        """
+        positions = [c.mounting_position for c in self.cameras if c.mounting_position != "NA"]
+        duplicates = []
+        seen = set()
+        for pos in positions:
+            if pos in seen and pos not in duplicates:
+                duplicates.append(pos)
+            seen.add(pos)
+        return duplicates
+
+    def get_cameras_with_na_position(self) -> List[int]:
+        """
+        Get list of camera numbers that have NA position.
+
+        Returns:
+            List of camera numbers with NA position
+        """
+        return [c.camera_number for c in self.cameras if c.mounting_position == "NA"]
+
+    def get_3_1_cameras_with_invalid_position(self) -> List[tuple]:
+        """
+        Get list of 3:1 cameras that are not in valid positions.
+
+        Returns:
+            List of tuples (camera_number, current_position)
+        """
+        invalid = []
+        for c in self.cameras:
+            if c.camera_type in ["3:1 manager", "3:1 worker"]:
+                if c.mounting_position not in VALID_3_1_POSITIONS and c.mounting_position != "NA":
+                    invalid.append((c.camera_number, c.mounting_position))
+        return invalid
+
+    def validate_configuration(self) -> tuple:
+        """
+        Validate the entire camera configuration.
+
+        Returns:
+            Tuple of (is_valid: bool, errors: List[str])
+        """
+        errors = []
+
+        # Check for NA positions
+        na_cameras = self.get_cameras_with_na_position()
+        if na_cameras:
+            cam_list = ", ".join(f"Camera {n}" for n in na_cameras)
+            errors.append(f"Mounting position not selected for: {cam_list}")
+
+        # Check for duplicate positions
+        duplicates = self.get_duplicate_positions()
+        if duplicates:
+            dup_list = ", ".join(duplicates)
+            errors.append(f"Duplicate mounting positions found: {dup_list}")
+
+        # Check 3:1 camera positions
+        invalid_3_1 = self.get_3_1_cameras_with_invalid_position()
+        if invalid_3_1:
+            for cam_num, pos in invalid_3_1:
+                errors.append(
+                    f"Camera {cam_num} is 3:1 type but positioned at '{pos}'. "
+                    f"3:1 cameras can only be at: {', '.join(VALID_3_1_POSITIONS)}"
+                )
+
+        # Check AI Central limit
+        ai_central_count = sum(1 for c in self.cameras if c.camera_type == "AI CENTRAL")
+        if ai_central_count > MAX_AI_CENTRAL:
+            errors.append(f"Too many AI CENTRAL cameras ({ai_central_count}). Maximum is {MAX_AI_CENTRAL}")
+
+        return len(errors) == 0, errors
 
     def to_dict(self) -> Dict[str, Any]:
         return {

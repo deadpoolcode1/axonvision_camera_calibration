@@ -15,7 +15,7 @@ from typing import Optional
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QComboBox, QGridLayout, QSizePolicy, QMessageBox,
-    QScrollArea
+    QScrollArea, QGroupBox
 )
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QPixmap, QImage
@@ -30,6 +30,7 @@ from ..data_models import PlatformConfiguration, MOUNTING_POSITIONS
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from intrinsic_calibration import NetworkCameraSource
+from ins_reader import INSSerialReader, MockINSReader
 
 
 class CameraPreviewCard(QFrame):
@@ -273,6 +274,12 @@ class CameraPreviewScreen(QWidget):
         self.camera_cards = []
         self.ping_failed_cameras = []
 
+        # INS reader for real-time data
+        self.ins_reader = None
+        self.ins_timer = QTimer()
+        self.ins_timer.timeout.connect(self._update_ins_display)
+        self.ins_connected = False
+
         self._setup_ui()
 
     def _setup_ui(self):
@@ -320,14 +327,202 @@ class CameraPreviewScreen(QWidget):
 
         main_layout.addWidget(self.status_frame)
 
+        # Top action bar with instructions and refresh button
+        action_bar = QHBoxLayout()
+
         # Instructions
         instructions = QLabel(
             "Review camera configuration and adjust mounting positions if needed. "
             "All cameras must be connected to proceed."
         )
         instructions.setWordWrap(True)
-        instructions.setStyleSheet(f"color: {COLORS['text_muted']}; font-style: italic;")
-        main_layout.addWidget(instructions)
+        instructions.setStyleSheet(f"color: {COLORS['text_muted']}; font-style: italic; font-size: 14px;")
+        action_bar.addWidget(instructions, 1)
+
+        # Refresh button
+        self.refresh_btn = QPushButton("Refresh Discovery")
+        self.refresh_btn.setObjectName("add_button")
+        self.refresh_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['primary']};
+                color: white;
+                padding: 10px 20px;
+                font-size: 14px;
+                font-weight: bold;
+                border-radius: 6px;
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['primary_dark']};
+            }}
+        """)
+        self.refresh_btn.clicked.connect(self._on_refresh_clicked)
+        action_bar.addWidget(self.refresh_btn)
+
+        main_layout.addLayout(action_bar)
+
+        # INS Data Panel
+        ins_panel = QFrame()
+        ins_panel.setStyleSheet(f"""
+            QFrame {{
+                background-color: {COLORS['white']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 8px;
+                padding: 15px;
+            }}
+        """)
+        ins_layout = QVBoxLayout(ins_panel)
+        ins_layout.setSpacing(10)
+
+        # INS Header with connection status
+        ins_header_layout = QHBoxLayout()
+        ins_title = QLabel("Real-Time INS Data")
+        ins_title.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {COLORS['primary']};")
+        ins_header_layout.addWidget(ins_title)
+
+        self.ins_status_label = QLabel("Not Connected")
+        self.ins_status_label.setStyleSheet(f"""
+            color: {COLORS['text_muted']};
+            font-size: 12px;
+            padding: 4px 8px;
+            background-color: {COLORS['background']};
+            border-radius: 4px;
+        """)
+        ins_header_layout.addStretch()
+        ins_header_layout.addWidget(self.ins_status_label)
+
+        self.connect_ins_btn = QPushButton("Connect INS")
+        self.connect_ins_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['success']};
+                color: white;
+                padding: 6px 12px;
+                font-size: 12px;
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['success_hover']};
+            }}
+        """)
+        self.connect_ins_btn.clicked.connect(self._toggle_ins_connection)
+        ins_header_layout.addWidget(self.connect_ins_btn)
+
+        ins_layout.addLayout(ins_header_layout)
+
+        # Data display in horizontal layout
+        data_layout = QHBoxLayout()
+        data_layout.setSpacing(30)
+
+        # LLA (Latitude, Longitude, Altitude)
+        lla_group = QFrame()
+        lla_group.setStyleSheet(f"""
+            QFrame {{
+                background-color: {COLORS['table_header']};
+                border-radius: 6px;
+                padding: 10px;
+            }}
+        """)
+        lla_layout = QVBoxLayout(lla_group)
+        lla_layout.setSpacing(5)
+
+        lla_title = QLabel("Location (LLA)")
+        lla_title.setStyleSheet(f"font-weight: bold; font-size: 14px; color: {COLORS['text_dark']};")
+        lla_layout.addWidget(lla_title)
+
+        # Latitude
+        lat_layout = QHBoxLayout()
+        lat_label = QLabel("Latitude:")
+        lat_label.setStyleSheet(f"font-size: 13px; color: {COLORS['text_muted']};")
+        lat_label.setFixedWidth(80)
+        self.lat_value = QLabel("---.------")
+        self.lat_value.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {COLORS['text_dark']}; font-family: monospace;")
+        lat_layout.addWidget(lat_label)
+        lat_layout.addWidget(self.lat_value)
+        lat_layout.addStretch()
+        lla_layout.addLayout(lat_layout)
+
+        # Longitude
+        lon_layout = QHBoxLayout()
+        lon_label = QLabel("Longitude:")
+        lon_label.setStyleSheet(f"font-size: 13px; color: {COLORS['text_muted']};")
+        lon_label.setFixedWidth(80)
+        self.lon_value = QLabel("---.------")
+        self.lon_value.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {COLORS['text_dark']}; font-family: monospace;")
+        lon_layout.addWidget(lon_label)
+        lon_layout.addWidget(self.lon_value)
+        lon_layout.addStretch()
+        lla_layout.addLayout(lon_layout)
+
+        # Altitude
+        alt_layout = QHBoxLayout()
+        alt_label = QLabel("Altitude:")
+        alt_label.setStyleSheet(f"font-size: 13px; color: {COLORS['text_muted']};")
+        alt_label.setFixedWidth(80)
+        self.alt_value = QLabel("-----.-- m")
+        self.alt_value.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {COLORS['text_dark']}; font-family: monospace;")
+        alt_layout.addWidget(alt_label)
+        alt_layout.addWidget(self.alt_value)
+        alt_layout.addStretch()
+        lla_layout.addLayout(alt_layout)
+
+        data_layout.addWidget(lla_group, 1)
+
+        # Orientation (Yaw, Pitch, Roll)
+        orientation_group = QFrame()
+        orientation_group.setStyleSheet(f"""
+            QFrame {{
+                background-color: {COLORS['table_header']};
+                border-radius: 6px;
+                padding: 10px;
+            }}
+        """)
+        orientation_layout = QVBoxLayout(orientation_group)
+        orientation_layout.setSpacing(5)
+
+        orientation_title = QLabel("Orientation (YPR)")
+        orientation_title.setStyleSheet(f"font-weight: bold; font-size: 14px; color: {COLORS['text_dark']};")
+        orientation_layout.addWidget(orientation_title)
+
+        # Yaw
+        yaw_layout = QHBoxLayout()
+        yaw_label = QLabel("Yaw:")
+        yaw_label.setStyleSheet(f"font-size: 13px; color: {COLORS['text_muted']};")
+        yaw_label.setFixedWidth(80)
+        self.yaw_value = QLabel("----.---")
+        self.yaw_value.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {COLORS['text_dark']}; font-family: monospace;")
+        yaw_layout.addWidget(yaw_label)
+        yaw_layout.addWidget(self.yaw_value)
+        yaw_layout.addStretch()
+        orientation_layout.addLayout(yaw_layout)
+
+        # Pitch
+        pitch_layout = QHBoxLayout()
+        pitch_label = QLabel("Pitch:")
+        pitch_label.setStyleSheet(f"font-size: 13px; color: {COLORS['text_muted']};")
+        pitch_label.setFixedWidth(80)
+        self.pitch_value = QLabel("----.---")
+        self.pitch_value.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {COLORS['text_dark']}; font-family: monospace;")
+        pitch_layout.addWidget(pitch_label)
+        pitch_layout.addWidget(self.pitch_value)
+        pitch_layout.addStretch()
+        orientation_layout.addLayout(pitch_layout)
+
+        # Roll
+        roll_layout = QHBoxLayout()
+        roll_label = QLabel("Roll:")
+        roll_label.setStyleSheet(f"font-size: 13px; color: {COLORS['text_muted']};")
+        roll_label.setFixedWidth(80)
+        self.roll_value = QLabel("----.---")
+        self.roll_value.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {COLORS['text_dark']}; font-family: monospace;")
+        roll_layout.addWidget(roll_label)
+        roll_layout.addWidget(self.roll_value)
+        roll_layout.addStretch()
+        orientation_layout.addLayout(roll_layout)
+
+        data_layout.addWidget(orientation_group, 1)
+
+        ins_layout.addLayout(data_layout)
+
+        main_layout.addWidget(ins_panel)
 
         # Scrollable camera grid area
         scroll_area = QScrollArea()
@@ -583,4 +778,161 @@ class CameraPreviewScreen(QWidget):
     def hideEvent(self, event):
         """Stop all streams when screen is hidden."""
         self.stop_all_streams()
+        self._disconnect_ins()
         super().hideEvent(event)
+
+    def _on_refresh_clicked(self):
+        """Handle refresh button click - re-verify all cameras."""
+        # Stop existing streams
+        self.stop_all_streams()
+
+        # Reset camera status
+        for card in self.camera_cards:
+            card.ping_status = None
+            card.video_label.setText("Connecting...")
+
+        # Update status message
+        self._update_status("testing", "Refreshing camera discovery...")
+
+        # Re-verify cameras
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(100, self.verify_cameras)
+
+    def _toggle_ins_connection(self):
+        """Toggle INS connection on/off."""
+        if self.ins_connected:
+            self._disconnect_ins()
+        else:
+            self._connect_ins()
+
+    def _connect_ins(self):
+        """Connect to INS device."""
+        try:
+            # Try to connect to real INS
+            self.ins_reader = INSSerialReader()
+            if self.ins_reader.connect():
+                self.ins_connected = True
+                self.ins_timer.start(100)  # Update every 100ms
+                self._update_ins_status("connected")
+                self.connect_ins_btn.setText("Disconnect INS")
+                self.connect_ins_btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: {COLORS['danger']};
+                        color: white;
+                        padding: 6px 12px;
+                        font-size: 12px;
+                        border-radius: 4px;
+                    }}
+                    QPushButton:hover {{
+                        background-color: {COLORS['danger_hover']};
+                    }}
+                """)
+            else:
+                # Fall back to mock INS for demo purposes
+                self.ins_reader = MockINSReader(yaw=45.0, pitch=2.5, roll=-1.0)
+                self.ins_reader.connect()
+                self.ins_connected = True
+                self.ins_timer.start(100)
+                self._update_ins_status("mock")
+                self.connect_ins_btn.setText("Disconnect INS")
+                self.connect_ins_btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: {COLORS['danger']};
+                        color: white;
+                        padding: 6px 12px;
+                        font-size: 12px;
+                        border-radius: 4px;
+                    }}
+                    QPushButton:hover {{
+                        background-color: {COLORS['danger_hover']};
+                    }}
+                """)
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "INS Connection Failed",
+                f"Failed to connect to INS device:\n{str(e)}\n\n"
+                "Please check:\n"
+                "  1. INS device is connected via USB\n"
+                "  2. Serial port permissions are set correctly\n"
+                "  3. INS device is powered on"
+            )
+
+    def _disconnect_ins(self):
+        """Disconnect from INS device."""
+        self.ins_timer.stop()
+        if self.ins_reader:
+            self.ins_reader.disconnect()
+            self.ins_reader = None
+        self.ins_connected = False
+        self._update_ins_status("disconnected")
+        self.connect_ins_btn.setText("Connect INS")
+        self.connect_ins_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['success']};
+                color: white;
+                padding: 6px 12px;
+                font-size: 12px;
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['success_hover']};
+            }}
+        """)
+
+        # Reset display values
+        self.lat_value.setText("---.------")
+        self.lon_value.setText("---.------")
+        self.alt_value.setText("-----.-- m")
+        self.yaw_value.setText("----.---")
+        self.pitch_value.setText("----.---")
+        self.roll_value.setText("----.---")
+
+    def _update_ins_status(self, status: str):
+        """Update INS connection status label."""
+        if status == "connected":
+            self.ins_status_label.setText("Connected")
+            self.ins_status_label.setStyleSheet(f"""
+                color: {COLORS['success']};
+                font-size: 12px;
+                font-weight: bold;
+                padding: 4px 8px;
+                background-color: #E8F5E9;
+                border-radius: 4px;
+            """)
+        elif status == "mock":
+            self.ins_status_label.setText("Mock Data")
+            self.ins_status_label.setStyleSheet(f"""
+                color: {COLORS['warning']};
+                font-size: 12px;
+                font-weight: bold;
+                padding: 4px 8px;
+                background-color: #FFF8E1;
+                border-radius: 4px;
+            """)
+        else:
+            self.ins_status_label.setText("Not Connected")
+            self.ins_status_label.setStyleSheet(f"""
+                color: {COLORS['text_muted']};
+                font-size: 12px;
+                padding: 4px 8px;
+                background-color: {COLORS['background']};
+                border-radius: 4px;
+            """)
+
+    def _update_ins_display(self):
+        """Update INS data display with latest reading."""
+        if not self.ins_reader:
+            return
+
+        reading = self.ins_reader.get_latest()
+        if reading:
+            # Update LLA
+            self.lat_value.setText(f"{reading.latitude:+011.6f}")
+            self.lon_value.setText(f"{reading.longitude:+012.6f}")
+            self.alt_value.setText(f"{reading.altitude:+08.2f} m")
+
+            # Update orientation
+            self.yaw_value.setText(f"{reading.yaw:+08.3f}")
+            self.pitch_value.setText(f"{reading.pitch:+08.3f}")
+            self.roll_value.setText(f"{reading.roll:+08.3f}")

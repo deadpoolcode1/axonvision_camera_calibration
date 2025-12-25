@@ -16,6 +16,7 @@ from .styles import MAIN_STYLESHEET
 from .data_models import (
     CalibrationDataStore, CalibrationSession, PlatformConfiguration
 )
+from .screens.login_screen import LoginScreen
 from .screens.welcome_screen import WelcomeScreen
 from .screens.platform_config_screen import PlatformConfigScreen
 from .screens.camera_preview_screen import CameraPreviewScreen
@@ -40,6 +41,7 @@ class MainWindow(QMainWindow):
         # Current session state
         self.current_session = None
         self.current_config = None
+        self.current_user = None  # Logged in user
 
         self._setup_ui()
         self._connect_signals()
@@ -64,6 +66,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.screen_stack)
 
         # Create screens
+        self.login_screen = LoginScreen()
         self.welcome_screen = WelcomeScreen(self.data_store)
         self.platform_config_screen = PlatformConfigScreen()
         self.platform_config_screen.set_base_path(self.base_path)
@@ -71,15 +74,19 @@ class MainWindow(QMainWindow):
         self.camera_preview_screen.set_base_path(self.base_path)
 
         # Add screens to stack
-        self.screen_stack.addWidget(self.welcome_screen)  # Index 0
-        self.screen_stack.addWidget(self.platform_config_screen)  # Index 1
-        self.screen_stack.addWidget(self.camera_preview_screen)  # Index 2
+        self.screen_stack.addWidget(self.login_screen)  # Index 0
+        self.screen_stack.addWidget(self.welcome_screen)  # Index 1
+        self.screen_stack.addWidget(self.platform_config_screen)  # Index 2
+        self.screen_stack.addWidget(self.camera_preview_screen)  # Index 3
 
-        # Start on welcome screen
+        # Start on login screen
         self.screen_stack.setCurrentIndex(0)
 
     def _connect_signals(self):
         """Connect screen signals to handlers."""
+        # Login screen signals
+        self.login_screen.login_successful.connect(self._on_login_success)
+
         # Welcome screen signals
         self.welcome_screen.start_new_calibration.connect(self._on_start_new)
         self.welcome_screen.load_existing_calibration.connect(self._on_load_existing)
@@ -93,21 +100,19 @@ class MainWindow(QMainWindow):
         self.camera_preview_screen.cancel_requested.connect(self._on_camera_preview_cancel)
         self.camera_preview_screen.next_requested.connect(self._on_camera_preview_next)
 
+    def _on_login_success(self, username: str):
+        """Handle successful login."""
+        self.current_user = username
+        self.screen_stack.setCurrentWidget(self.welcome_screen)
+
     def _on_start_new(self):
         """Handle Start New Calibration from welcome screen."""
         # Create fresh configuration
         self.current_config = PlatformConfiguration()
 
-        # Add 4 default cameras
+        # Add 4 default cameras (positions default to NA)
         for _ in range(4):
             self.current_config.add_camera()
-
-        # Set default mounting positions for common setup
-        if len(self.current_config.cameras) >= 4:
-            self.current_config.cameras[0].mounting_position = "Front Center"
-            self.current_config.cameras[1].mounting_position = "Rear Center"
-            self.current_config.cameras[2].mounting_position = "Left Center"
-            self.current_config.cameras[3].mounting_position = "Right Center"
 
         # Update platform config screen and navigate
         self.platform_config_screen.set_config(self.current_config)

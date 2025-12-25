@@ -20,7 +20,8 @@ from PySide6.QtCore import Qt, Signal
 from ..styles import COLORS
 from ..data_models import (
     PlatformConfiguration, CameraDefinition,
-    MOUNTING_POSITIONS, CAMERA_TYPES, CAMERA_MODELS, PLATFORM_TYPES
+    MOUNTING_POSITIONS, CAMERA_TYPES, CAMERA_MODELS, PLATFORM_TYPES,
+    VALID_3_1_POSITIONS, MAX_CAMERAS, MAX_AI_CENTRAL
 )
 from ..dialogs import IntrinsicCalibrationDialog
 
@@ -31,9 +32,11 @@ class CameraTableWidget(QTableWidget):
     camera_removed = Signal(int)  # Emits row index when camera is removed
     camera_verify_requested = Signal(int)  # Emits row index when verify is clicked
     camera_calibrate_requested = Signal(int)  # Emits row index when calibrate is clicked
+    camera_type_changed = Signal(int, str)  # Emits row index and new type
+    camera_position_changed = Signal(int, str)  # Emits row index and new position
 
     COLUMNS = ['#', 'Camera ID', 'Type', 'Camera Model', 'Mounting Position', 'IP Address', 'Intrinsic', 'Calibrate', 'Verify', 'Action']
-    COLUMN_WIDTHS = [40, 100, 60, 130, 180, 160, 70, 90, 80, 80]
+    COLUMN_WIDTHS = [40, 100, 100, 130, 180, 160, 70, 90, 80, 80]
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -183,7 +186,7 @@ class CameraTableWidget(QTableWidget):
 
     def _on_type_changed(self, row: int, text: str):
         """Handle camera type change."""
-        pass
+        self.camera_type_changed.emit(row, text)
 
     def _on_model_changed(self, row: int, text: str):
         """Handle camera model change."""
@@ -191,7 +194,7 @@ class CameraTableWidget(QTableWidget):
 
     def _on_position_changed(self, row: int, text: str):
         """Handle mounting position change."""
-        pass
+        self.camera_position_changed.emit(row, text)
 
     def _on_ip_changed(self, row: int, text: str):
         """Handle IP address change."""
@@ -248,6 +251,52 @@ class CameraTableWidget(QTableWidget):
                     label.setText("\u2717")
                     label.setStyleSheet(f"color: {COLORS['danger']}; font-weight: bold; font-size: 16px;")
                     label.setToolTip(f"Not found: {file_path}")
+
+    def highlight_position_errors(self, na_rows: list, duplicate_rows: list):
+        """
+        Highlight rows with position errors (NA or duplicate).
+
+        Args:
+            na_rows: List of row indices with NA position
+            duplicate_rows: List of row indices with duplicate positions
+        """
+        for row in range(self.rowCount()):
+            combo = self.cellWidget(row, 4)  # Position combo is column 4
+            if combo:
+                if row in na_rows or row in duplicate_rows:
+                    combo.setStyleSheet(f"""
+                        QComboBox {{
+                            border: 2px solid {COLORS['danger']};
+                            background-color: #FFEBEE;
+                        }}
+                    """)
+                    if row in na_rows:
+                        combo.setToolTip("Please select a mounting position")
+                    else:
+                        combo.setToolTip("Duplicate position - please select a different position")
+                else:
+                    combo.setStyleSheet("")  # Reset to default
+                    combo.setToolTip("")
+
+    def highlight_type_errors(self, invalid_type_rows: list):
+        """
+        Highlight rows with camera type errors.
+
+        Args:
+            invalid_type_rows: List of row indices with invalid camera types
+        """
+        for row in range(self.rowCount()):
+            combo = self.cellWidget(row, 2)  # Type combo is column 2
+            if combo:
+                if row in invalid_type_rows:
+                    combo.setStyleSheet(f"""
+                        QComboBox {{
+                            border: 2px solid {COLORS['danger']};
+                            background-color: #FFEBEE;
+                        }}
+                    """)
+                else:
+                    combo.setStyleSheet("")  # Reset to default
 
 
 class PlatformConfigScreen(QWidget):
@@ -350,6 +399,8 @@ class PlatformConfigScreen(QWidget):
         self.camera_table.camera_removed.connect(self._on_camera_removed)
         self.camera_table.camera_verify_requested.connect(self._on_camera_verify)
         self.camera_table.camera_calibrate_requested.connect(self._on_camera_calibrate)
+        self.camera_table.camera_type_changed.connect(self._on_camera_type_changed)
+        self.camera_table.camera_position_changed.connect(self._on_camera_position_changed)
         self.camera_table.setMinimumHeight(200)
         camera_section.addWidget(self.camera_table)
 
@@ -426,8 +477,19 @@ class PlatformConfigScreen(QWidget):
 
     def _on_add_camera(self):
         """Add a new camera to the configuration."""
+        # Check if we can add more cameras
+        can_add, reason = self.config.can_add_camera()
+        if not can_add:
+            QMessageBox.warning(
+                self,
+                "Cannot Add Camera",
+                reason
+            )
+            return
+
         camera = self.config.add_camera()
         self.camera_table.add_camera_row(camera, self.base_path)
+        self._validate_and_highlight()
 
     def _on_camera_removed(self, row: int):
         """Remove a camera from the configuration."""
@@ -441,6 +503,101 @@ class PlatformConfigScreen(QWidget):
 
         self.config.remove_camera(row)
         self._reload_camera_table()
+        self._validate_and_highlight()
+
+    def _on_camera_type_changed(self, row: int, new_type: str):
+        """Handle camera type change."""
+        if row < len(self.config.cameras):
+            old_type = self.config.cameras[row].camera_type
+            self.config.cameras[row].camera_type = new_type
+
+            # Check if AI CENTRAL limit is exceeded
+            ai_central_count = sum(1 for c in self.config.cameras if c.camera_type == "AI CENTRAL")
+            if ai_central_count > MAX_AI_CENTRAL and new_type == "AI CENTRAL":
+                QMessageBox.warning(
+                    self,
+                    "AI CENTRAL Limit",
+                    f"Only {MAX_AI_CENTRAL} AI CENTRAL camera is allowed.\n"
+                    "Please change another camera's type first."
+                )
+                # Revert the change
+                self.config.cameras[row].camera_type = old_type
+                combo = self.camera_table.cellWidget(row, 2)
+                if combo:
+                    combo.blockSignals(True)
+                    combo.setCurrentText(old_type)
+                    combo.blockSignals(False)
+                return
+
+            # Check 3:1 position restriction
+            if new_type in ["3:1 manager", "3:1 worker"]:
+                current_pos = self.config.cameras[row].mounting_position
+                if current_pos not in VALID_3_1_POSITIONS and current_pos != "NA":
+                    QMessageBox.information(
+                        self,
+                        "3:1 Position Restriction",
+                        f"3:1 cameras can only be placed at:\n"
+                        f"  - {VALID_3_1_POSITIONS[0]}\n"
+                        f"  - {VALID_3_1_POSITIONS[1]}\n\n"
+                        f"Please update the mounting position."
+                    )
+
+            self._validate_and_highlight()
+
+    def _on_camera_position_changed(self, row: int, new_position: str):
+        """Handle camera position change."""
+        if row < len(self.config.cameras):
+            self.config.cameras[row].mounting_position = new_position
+
+            # Check 3:1 position restriction
+            camera_type = self.config.cameras[row].camera_type
+            if camera_type in ["3:1 manager", "3:1 worker"]:
+                if new_position not in VALID_3_1_POSITIONS and new_position != "NA":
+                    QMessageBox.warning(
+                        self,
+                        "Invalid Position for 3:1 Camera",
+                        f"3:1 cameras can only be placed at:\n"
+                        f"  - {VALID_3_1_POSITIONS[0]}\n"
+                        f"  - {VALID_3_1_POSITIONS[1]}\n\n"
+                        f"Current camera type: {camera_type}\n"
+                        f"Selected position: {new_position}\n\n"
+                        f"Please select a valid position or change the camera type."
+                    )
+
+            self._validate_and_highlight()
+
+    def _validate_and_highlight(self):
+        """Validate configuration and highlight errors in the table."""
+        self._update_config_from_ui()
+
+        # Find rows with NA positions
+        na_rows = []
+        for i, cam in enumerate(self.config.cameras):
+            if cam.mounting_position == "NA":
+                na_rows.append(i)
+
+        # Find rows with duplicate positions
+        duplicate_rows = []
+        positions = {}
+        for i, cam in enumerate(self.config.cameras):
+            if cam.mounting_position != "NA":
+                if cam.mounting_position in positions:
+                    duplicate_rows.append(i)
+                    if positions[cam.mounting_position] not in duplicate_rows:
+                        duplicate_rows.append(positions[cam.mounting_position])
+                else:
+                    positions[cam.mounting_position] = i
+
+        # Find rows with invalid 3:1 positions
+        invalid_3_1_rows = []
+        for i, cam in enumerate(self.config.cameras):
+            if cam.camera_type in ["3:1 manager", "3:1 worker"]:
+                if cam.mounting_position not in VALID_3_1_POSITIONS and cam.mounting_position != "NA":
+                    invalid_3_1_rows.append(i)
+
+        # Highlight errors
+        self.camera_table.highlight_position_errors(na_rows, duplicate_rows)
+        self.camera_table.highlight_type_errors(invalid_3_1_rows)
 
     def _on_camera_verify(self, row: int):
         """Verify camera connectivity and intrinsic calibration file."""
@@ -573,7 +730,7 @@ class PlatformConfigScreen(QWidget):
 
     def _on_next_clicked(self):
         """Handle Next button click."""
-        # Validate inputs
+        # Validate platform ID
         if not self.platform_id_edit.text().strip():
             QMessageBox.warning(
                 self,
@@ -585,6 +742,26 @@ class PlatformConfigScreen(QWidget):
 
         # Update config from UI
         self._update_config_from_ui()
+
+        # Validate camera configuration
+        is_valid, errors = self.config.validate_configuration()
+        if not is_valid:
+            # Highlight errors in UI
+            self._validate_and_highlight()
+
+            # Show detailed error message
+            error_msg = "Cannot proceed due to the following issues:\n\n"
+            for i, error in enumerate(errors, 1):
+                error_msg += f"{i}. {error}\n\n"
+
+            error_msg += "Please fix these issues before proceeding."
+
+            QMessageBox.warning(
+                self,
+                "Configuration Errors",
+                error_msg
+            )
+            return
 
         # Emit signal with updated config
         self.next_requested.emit(self.config)

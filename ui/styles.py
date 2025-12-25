@@ -22,7 +22,7 @@ COLORS = {
     'table_row_alt': '#F8F9FA',  # Alternating row color
 }
 
-# Main application stylesheet
+# Main application stylesheet - Increased text sizes for better readability
 MAIN_STYLESHEET = f"""
 QMainWindow {{
     background-color: {COLORS['background']};
@@ -30,117 +30,141 @@ QMainWindow {{
 
 QWidget {{
     font-family: 'Segoe UI', 'Arial', sans-serif;
-    font-size: 14px;
+    font-size: 16px;
     color: {COLORS['text_dark']};
 }}
 
 QLabel {{
     color: {COLORS['text_dark']};
+    font-size: 16px;
 }}
 
 QLabel#title {{
-    font-size: 32px;
+    font-size: 36px;
     font-weight: bold;
     color: {COLORS['primary']};
 }}
 
 QLabel#subtitle {{
-    font-size: 16px;
+    font-size: 18px;
     color: {COLORS['text_muted']};
 }}
 
 QLabel#section_header {{
-    font-size: 18px;
+    font-size: 20px;
     font-weight: bold;
     color: {COLORS['text_dark']};
     padding-top: 10px;
 }}
 
 QLabel#screen_indicator {{
-    font-size: 12px;
+    font-size: 14px;
     color: {COLORS['text_muted']};
     font-style: italic;
 }}
 
 QLabel#step_indicator {{
-    font-size: 12px;
+    font-size: 14px;
     color: {COLORS['text_muted']};
 }}
 
 QLabel#version {{
-    font-size: 11px;
+    font-size: 13px;
     color: {COLORS['text_muted']};
 }}
 
 QPushButton {{
-    padding: 10px 20px;
+    padding: 12px 24px;
     border-radius: 6px;
-    font-size: 14px;
+    font-size: 16px;
     font-weight: 500;
     border: none;
+}}
+
+QPushButton:hover {{
+    cursor: pointer;
 }}
 
 QPushButton#primary_button {{
     background-color: {COLORS['success']};
     color: white;
-    padding: 15px 40px;
-    font-size: 18px;
+    padding: 18px 45px;
+    font-size: 20px;
     font-weight: bold;
-    min-width: 300px;
+    min-width: 320px;
 }}
 
 QPushButton#primary_button:hover {{
     background-color: {COLORS['success_hover']};
+    transform: translateY(-1px);
+}}
+
+QPushButton#primary_button:pressed {{
+    background-color: #1e7e34;
 }}
 
 QPushButton#secondary_button {{
     background-color: {COLORS['white']};
     color: {COLORS['primary']};
     border: 2px solid {COLORS['primary']};
-    padding: 15px 40px;
-    font-size: 16px;
+    padding: 18px 45px;
+    font-size: 18px;
     font-weight: 500;
-    min-width: 300px;
+    min-width: 320px;
 }}
 
 QPushButton#secondary_button:hover {{
     background-color: {COLORS['table_header']};
+    border-color: {COLORS['primary_dark']};
+}}
+
+QPushButton#secondary_button:pressed {{
+    background-color: #d0e8f5;
 }}
 
 QPushButton#settings_button {{
     background-color: {COLORS['background']};
     color: {COLORS['text_muted']};
     border: 1px solid {COLORS['border']};
-    padding: 8px 16px;
-    font-size: 13px;
+    padding: 10px 18px;
+    font-size: 14px;
 }}
 
 QPushButton#settings_button:hover {{
     background-color: {COLORS['white']};
     border-color: {COLORS['text_muted']};
+    color: {COLORS['text_dark']};
 }}
 
 QPushButton#add_button {{
     background-color: {COLORS['primary']};
     color: white;
-    padding: 8px 16px;
-    font-size: 13px;
+    padding: 10px 20px;
+    font-size: 14px;
 }}
 
 QPushButton#add_button:hover {{
     background-color: {COLORS['primary_dark']};
 }}
 
+QPushButton#add_button:pressed {{
+    background-color: #144d6b;
+}}
+
 QPushButton#remove_button {{
     background-color: {COLORS['danger']};
     color: white;
-    padding: 4px 8px;
-    font-size: 11px;
-    min-width: 60px;
+    padding: 6px 10px;
+    font-size: 12px;
+    min-width: 65px;
 }}
 
 QPushButton#remove_button:hover {{
     background-color: {COLORS['danger_hover']};
+}}
+
+QPushButton#remove_button:pressed {{
+    background-color: #a71d2a;
 }}
 
 QTableWidget QPushButton#remove_button {{
@@ -155,21 +179,25 @@ QTableWidget QPushButton#remove_button:hover {{
 QPushButton#verify_button {{
     background-color: {COLORS['warning']};
     color: {COLORS['text_dark']};
-    padding: 4px 8px;
-    font-size: 11px;
+    padding: 6px 10px;
+    font-size: 12px;
     font-weight: bold;
-    min-width: 60px;
+    min-width: 65px;
 }}
 
 QPushButton#verify_button:hover {{
     background-color: #E0A800;
 }}
 
+QPushButton#verify_button:pressed {{
+    background-color: #c69500;
+}}
+
 QTableWidget QPushButton#verify_button {{
     background-color: {COLORS['warning']};
     color: {COLORS['text_dark']};
-    padding: 4px 8px;
-    min-width: 60px;
+    padding: 6px 10px;
+    min-width: 65px;
 }}
 
 QTableWidget QPushButton#verify_button:hover {{
@@ -179,21 +207,25 @@ QTableWidget QPushButton#verify_button:hover {{
 QPushButton#calibrate_button {{
     background-color: {COLORS['primary']};
     color: white;
-    padding: 4px 8px;
-    font-size: 11px;
+    padding: 6px 10px;
+    font-size: 12px;
     font-weight: bold;
-    min-width: 70px;
+    min-width: 75px;
 }}
 
 QPushButton#calibrate_button:hover {{
     background-color: {COLORS['primary_dark']};
 }}
 
+QPushButton#calibrate_button:pressed {{
+    background-color: #144d6b;
+}}
+
 QTableWidget QPushButton#calibrate_button {{
     background-color: {COLORS['primary']};
     color: white;
-    padding: 4px 8px;
-    min-width: 70px;
+    padding: 6px 10px;
+    min-width: 75px;
 }}
 
 QTableWidget QPushButton#calibrate_button:hover {{
@@ -203,50 +235,72 @@ QTableWidget QPushButton#calibrate_button:hover {{
 QPushButton#nav_button {{
     background-color: {COLORS['primary']};
     color: white;
-    padding: 10px 24px;
-    font-size: 14px;
+    padding: 12px 28px;
+    font-size: 16px;
+    font-weight: bold;
 }}
 
 QPushButton#nav_button:hover {{
     background-color: {COLORS['primary_dark']};
 }}
 
+QPushButton#nav_button:pressed {{
+    background-color: #144d6b;
+}}
+
 QPushButton#cancel_button {{
     background-color: {COLORS['text_muted']};
     color: white;
-    padding: 10px 24px;
-    font-size: 14px;
+    padding: 12px 28px;
+    font-size: 16px;
 }}
 
 QPushButton#cancel_button:hover {{
     background-color: #5A6268;
 }}
 
+QPushButton#cancel_button:pressed {{
+    background-color: #4e5459;
+}}
+
 QLineEdit {{
-    padding: 8px 12px;
-    border: 1px solid {COLORS['border']};
+    padding: 10px 14px;
+    border: 2px solid {COLORS['border']};
     border-radius: 4px;
     background-color: {COLORS['white']};
+    font-size: 15px;
+}}
+
+QLineEdit:hover {{
+    border-color: {COLORS['primary_dark']};
 }}
 
 QLineEdit:focus {{
     border-color: {COLORS['primary']};
+    background-color: #FFFFFF;
 }}
 
 QComboBox {{
-    padding: 8px 12px;
-    border: 1px solid {COLORS['border']};
+    padding: 10px 14px;
+    border: 2px solid {COLORS['border']};
     border-radius: 4px;
     background-color: {COLORS['white']};
+    font-size: 15px;
+}}
+
+QComboBox:hover {{
+    border-color: {COLORS['primary_dark']};
 }}
 
 QTableWidget QComboBox {{
-    padding: 4px 8px;
-    min-width: 50px;
+    padding: 6px 10px;
+    min-width: 60px;
+    font-size: 14px;
 }}
 
 QTableWidget QLineEdit {{
-    padding: 4px 8px;
+    padding: 6px 10px;
+    font-size: 14px;
 }}
 
 QComboBox:focus {{
@@ -271,15 +325,20 @@ QTableWidget {{
     border: 1px solid {COLORS['border']};
     border-radius: 4px;
     gridline-color: {COLORS['border']};
+    font-size: 14px;
 }}
 
 QTableWidget::item {{
-    padding: 8px;
+    padding: 10px;
 }}
 
 QTableWidget::item:selected {{
     background-color: {COLORS['table_header']};
     color: {COLORS['text_dark']};
+}}
+
+QTableWidget::item:hover {{
+    background-color: #F0F7FF;
 }}
 
 QTableWidget::item:focus {{
@@ -291,7 +350,8 @@ QHeaderView::section {{
     background-color: {COLORS['table_header']};
     color: {COLORS['primary']};
     font-weight: bold;
-    padding: 10px;
+    font-size: 14px;
+    padding: 12px;
     border: none;
     border-bottom: 2px solid {COLORS['border']};
 }}
@@ -308,14 +368,29 @@ QFrame#card {{
     padding: 20px;
 }}
 
+QFrame#card:hover {{
+    border-color: {COLORS['primary']};
+}}
+
 QFrame#recent_item {{
     background-color: {COLORS['white']};
     border-bottom: 1px solid {COLORS['border']};
-    padding: 12px 16px;
+    padding: 14px 18px;
 }}
 
 QFrame#recent_item:hover {{
     background-color: {COLORS['table_row_alt']};
+    border-left: 3px solid {COLORS['primary']};
+}}
+
+/* Tooltips styling */
+QToolTip {{
+    background-color: {COLORS['text_dark']};
+    color: {COLORS['white']};
+    border: none;
+    padding: 8px 12px;
+    font-size: 13px;
+    border-radius: 4px;
 }}
 """
 
