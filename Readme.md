@@ -2,6 +2,11 @@
 
 Complete calibration system for multi-camera INS integration. Determines both intrinsic (internal) and extrinsic (position/orientation) camera parameters.
 
+## UI Activation
+
+python main_ui.py
+
+
 ## Overview
 
 | Calibration | What it finds | When to do |
