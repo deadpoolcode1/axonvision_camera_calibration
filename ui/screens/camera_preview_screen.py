@@ -11,6 +11,7 @@ Displays camera previews and allows mounting position adjustments:
 from pathlib import Path
 import subprocess
 import platform
+from typing import Optional
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QComboBox, QGridLayout, QSizePolicy, QMessageBox,
@@ -19,8 +20,16 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QPixmap, QImage
 
+import numpy as np
+import cv2
+
 from ..styles import COLORS
 from ..data_models import PlatformConfiguration, MOUNTING_POSITIONS
+
+# Import camera streaming from intrinsic_calibration module
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from intrinsic_calibration import NetworkCameraSource
 
 
 class CameraPreviewCard(QFrame):
@@ -38,6 +47,12 @@ class CameraPreviewCard(QFrame):
         self.ip_address = ip_address
         self.mounting_position = mounting_position
         self.ping_status = None  # None = not tested, True = ok, False = failed
+
+        # Camera streaming components
+        self.camera_source: Optional[NetworkCameraSource] = None
+        self.timer = QTimer()
+        self.timer.timeout.connect(self._update_frame)
+        self._is_streaming = False
 
         self._setup_ui()
 
@@ -83,28 +98,20 @@ class CameraPreviewCard(QFrame):
         info_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 12px;")
         layout.addWidget(info_label)
 
-        # Preview area (placeholder for now - could add live preview later)
-        self.preview_frame = QFrame()
-        self.preview_frame.setFixedSize(280, 180)
-        self.preview_frame.setStyleSheet(f"""
-            background-color: {COLORS['background']};
+        # Preview area - QLabel for live video display
+        self.video_label = QLabel()
+        self.video_label.setFixedSize(280, 180)
+        self.video_label.setAlignment(Qt.AlignCenter)
+        self.video_label.setStyleSheet(f"""
+            background-color: #1a1a1a;
             border: 1px solid {COLORS['border']};
             border-radius: 4px;
-        """)
-
-        preview_layout = QVBoxLayout(self.preview_frame)
-        preview_layout.setAlignment(Qt.AlignCenter)
-
-        preview_placeholder = QLabel("Camera Preview")
-        preview_placeholder.setStyleSheet(f"""
             color: {COLORS['text_muted']};
-            font-size: 14px;
-            font-style: italic;
+            font-size: 12px;
         """)
-        preview_placeholder.setAlignment(Qt.AlignCenter)
-        preview_layout.addWidget(preview_placeholder)
+        self.video_label.setText("Connecting...")
 
-        layout.addWidget(self.preview_frame, alignment=Qt.AlignCenter)
+        layout.addWidget(self.video_label, alignment=Qt.AlignCenter)
 
         # Mounting Position selector
         position_layout = QHBoxLayout()
@@ -165,6 +172,86 @@ class CameraPreviewCard(QFrame):
     def get_mounting_position(self) -> str:
         """Get current mounting position."""
         return self.position_combo.currentText()
+
+    def start_streaming(self):
+        """Start camera streaming."""
+        if self._is_streaming:
+            return
+
+        if not self.ip_address:
+            self.video_label.setText("No IP address")
+            return
+
+        self.video_label.setText("Connecting...")
+
+        try:
+            self.camera_source = NetworkCameraSource(
+                ip=self.ip_address,
+                api_port=5000,
+                multicast_host="239.255.0.1",
+                stream_port=5010,
+                timeout=10.0
+            )
+
+            if self.camera_source.connect():
+                self._is_streaming = True
+                self.timer.start(33)  # ~30 FPS
+            else:
+                error_msg = self.camera_source.last_error or "Connection failed"
+                self.video_label.setText(f"Error:\n{error_msg[:30]}...")
+                self.video_label.setStyleSheet(f"""
+                    background-color: #1a1a1a;
+                    border: 1px solid {COLORS['danger']};
+                    border-radius: 4px;
+                    color: {COLORS['danger']};
+                    font-size: 10px;
+                """)
+        except Exception as e:
+            self.video_label.setText(f"Error:\n{str(e)[:30]}...")
+
+    def stop_streaming(self):
+        """Stop camera streaming."""
+        self.timer.stop()
+        self._is_streaming = False
+
+        if self.camera_source:
+            self.camera_source.release()
+            self.camera_source = None
+
+    def _update_frame(self):
+        """Update video frame from camera."""
+        if not self.camera_source:
+            return
+
+        frame = self.camera_source.get_image()
+        if frame is not None:
+            self._display_frame(frame)
+
+    def _display_frame(self, frame: np.ndarray):
+        """Convert OpenCV frame to QPixmap and display."""
+        # Convert BGR to RGB
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        # Scale frame to fit label (280x180)
+        h, w = rgb_frame.shape[:2]
+        target_w, target_h = 280, 180
+
+        scale_w = target_w / w
+        scale_h = target_h / h
+        scale = min(scale_w, scale_h)
+
+        new_w = int(w * scale)
+        new_h = int(h * scale)
+        rgb_frame = cv2.resize(rgb_frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        h, w = rgb_frame.shape[:2]
+
+        # Create QImage
+        bytes_per_line = 3 * w
+        q_image = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
+
+        # Display
+        pixmap = QPixmap.fromImage(q_image)
+        self.video_label.setPixmap(pixmap)
 
 
 class CameraPreviewScreen(QWidget):
@@ -363,6 +450,9 @@ class CameraPreviewScreen(QWidget):
             # Show warning dialog
             self._show_camera_failure_dialog()
 
+        # Start video streaming for cameras that passed ping
+        self.start_all_streams()
+
     def _ping_device(self, ip_address: str) -> bool:
         """Ping a device to check if it's reachable."""
         if not ip_address:
@@ -444,10 +534,14 @@ class CameraPreviewScreen(QWidget):
 
     def _on_cancel_clicked(self):
         """Handle Cancel/Back button click."""
+        self.stop_all_streams()
         self.cancel_requested.emit()
 
     def _on_next_clicked(self):
         """Handle Next button click."""
+        # Stop streams before navigating
+        self.stop_all_streams()
+
         # Update config with any mounting position changes
         self._update_config_from_ui()
 
@@ -474,3 +568,19 @@ class CameraPreviewScreen(QWidget):
                 if camera.camera_number == card.camera_number:
                     camera.mounting_position = card.get_mounting_position()
                     break
+
+    def start_all_streams(self):
+        """Start video streaming for all camera cards that passed ping."""
+        for card in self.camera_cards:
+            if card.ping_status:  # Only start if ping passed
+                card.start_streaming()
+
+    def stop_all_streams(self):
+        """Stop video streaming for all camera cards."""
+        for card in self.camera_cards:
+            card.stop_streaming()
+
+    def hideEvent(self, event):
+        """Stop all streams when screen is hidden."""
+        self.stop_all_streams()
+        super().hideEvent(event)
