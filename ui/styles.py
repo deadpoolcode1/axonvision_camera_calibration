@@ -142,6 +142,18 @@ QPushButton#remove_button:hover {{
     background-color: {COLORS['danger_hover']};
 }}
 
+QPushButton#verify_button {{
+    background-color: {COLORS['warning']};
+    color: {COLORS['text_dark']};
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: bold;
+}}
+
+QPushButton#verify_button:hover {{
+    background-color: #E0A800;
+}}
+
 QPushButton#nav_button {{
     background-color: {COLORS['primary']};
     color: white;

@@ -8,6 +8,8 @@ Configure platform information and camera setup:
 """
 
 from pathlib import Path
+import subprocess
+import platform
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QLineEdit, QComboBox, QTableWidget, QTableWidgetItem,
@@ -26,9 +28,10 @@ class CameraTableWidget(QTableWidget):
     """Custom table widget for camera configuration."""
 
     camera_removed = Signal(int)  # Emits row index when camera is removed
+    camera_verify_requested = Signal(int)  # Emits row index when verify is clicked
 
-    COLUMNS = ['Camera', 'Camera ID', 'Type', 'Camera Model', 'Mounting Position', 'IP Address', 'Intrinsic', 'Action']
-    COLUMN_WIDTHS = [60, 100, 80, 120, 150, 140, 80, 80]
+    COLUMNS = ['Camera', 'Camera ID', 'Type', 'Camera Model', 'Mounting Position', 'IP Address', 'Intrinsic', 'Verify', 'Action']
+    COLUMN_WIDTHS = [60, 100, 80, 120, 150, 140, 80, 70, 80]
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -119,11 +122,17 @@ class CameraTableWidget(QTableWidget):
         intrinsic_layout.addWidget(intrinsic_label, alignment=Qt.AlignCenter)
         self.setCellWidget(row, 6, intrinsic_container)
 
+        # Verify button
+        verify_btn = QPushButton("Verify")
+        verify_btn.setObjectName("verify_button")
+        verify_btn.clicked.connect(lambda checked, r=row: self._on_verify_clicked(r))
+        self.setCellWidget(row, 7, verify_btn)
+
         # Remove button
         remove_btn = QPushButton("Remove")
         remove_btn.setObjectName("remove_button")
         remove_btn.clicked.connect(lambda checked, r=row: self._on_remove_clicked(r))
-        self.setCellWidget(row, 7, remove_btn)
+        self.setCellWidget(row, 8, remove_btn)
 
         # Adjust row height
         self.setRowHeight(row, 45)
@@ -149,6 +158,10 @@ class CameraTableWidget(QTableWidget):
     def _on_ip_changed(self, row: int, text: str):
         """Handle IP address change."""
         pass
+
+    def _on_verify_clicked(self, row: int):
+        """Handle verify button click."""
+        self.camera_verify_requested.emit(row)
 
     def _on_remove_clicked(self, row: int):
         """Handle remove button click."""
@@ -293,6 +306,7 @@ class PlatformConfigScreen(QWidget):
         # Camera table
         self.camera_table = CameraTableWidget()
         self.camera_table.camera_removed.connect(self._on_camera_removed)
+        self.camera_table.camera_verify_requested.connect(self._on_camera_verify)
         self.camera_table.setMinimumHeight(200)
         camera_section.addWidget(self.camera_table)
 
@@ -384,6 +398,64 @@ class PlatformConfigScreen(QWidget):
 
         self.config.remove_camera(row)
         self._reload_camera_table()
+
+    def _on_camera_verify(self, row: int):
+        """Verify camera connectivity and intrinsic calibration file."""
+        # Get current camera data from UI
+        camera_data = self.camera_table.get_camera_data(row)
+        ip_address = camera_data.get('ip_address', '')
+        camera_id = camera_data.get('camera_id', '')
+        camera_num = camera_data.get('camera_number', row + 1)
+
+        issues = []
+        success_items = []
+
+        # Check 1: Ping the device
+        ping_ok = self._ping_device(ip_address)
+        if ping_ok:
+            success_items.append(f"Network: Device at {ip_address} is reachable")
+        else:
+            issues.append(f"Network: Cannot reach device at {ip_address}")
+
+        # Check 2: Verify intrinsic calibration file exists
+        intrinsic_path = Path(self.base_path) / f"camera_intrinsic/camera_intrinsics_{camera_id}.json"
+        if intrinsic_path.exists():
+            success_items.append(f"Intrinsic: Calibration file found for '{camera_id}'")
+        else:
+            issues.append(f"Intrinsic: Calibration file not found at:\n{intrinsic_path}")
+
+        # Show result dialog
+        if issues:
+            msg = f"Camera {camera_num} verification found issues:\n\n"
+            msg += "ISSUES:\n" + "\n".join(f"  - {issue}" for issue in issues)
+            if success_items:
+                msg += "\n\nPASSED:\n" + "\n".join(f"  + {item}" for item in success_items)
+            QMessageBox.warning(self, f"Camera {camera_num} - Verification Failed", msg)
+        else:
+            msg = f"Camera {camera_num} verification passed!\n\n"
+            msg += "\n".join(f"  + {item}" for item in success_items)
+            QMessageBox.information(self, f"Camera {camera_num} - Verification OK", msg)
+
+    def _ping_device(self, ip_address: str) -> bool:
+        """Ping a device to check if it's reachable."""
+        if not ip_address:
+            return False
+
+        try:
+            # Determine ping command based on OS
+            param = '-n' if platform.system().lower() == 'windows' else '-c'
+            timeout_param = '-w' if platform.system().lower() == 'windows' else '-W'
+
+            # Run ping with 1 packet and 2 second timeout
+            result = subprocess.run(
+                ['ping', param, '1', timeout_param, '2', ip_address],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5
+            )
+            return result.returncode == 0
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, FileNotFoundError):
+            return False
 
     def _reload_camera_table(self):
         """Reload the camera table from config."""
