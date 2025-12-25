@@ -22,7 +22,8 @@ from ..styles import COLORS
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from intrinsic_calibration import (
-    ChArUcoBoardConfig, ChArUcoDetector, IntrinsicCalibrator, NetworkCameraSource
+    ChArUcoBoardConfig, ChArUcoDetector, IntrinsicCalibrator, NetworkCameraSource,
+    CoverageAnalyzer
 )
 
 
@@ -160,6 +161,36 @@ class IntrinsicCalibrationDialog(QDialog):
             }}
         """)
         main_layout.addWidget(self.progress_bar)
+
+        # Capture guidance section
+        guidance_frame = QFrame()
+        guidance_frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: {COLORS['background']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 6px;
+                padding: 8px;
+            }}
+        """)
+        guidance_layout = QVBoxLayout(guidance_frame)
+        guidance_layout.setContentsMargins(10, 8, 10, 8)
+        guidance_layout.setSpacing(4)
+
+        guidance_header = QLabel("Capture Guidance")
+        guidance_header.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {COLORS['text_muted']};")
+        guidance_layout.addWidget(guidance_header)
+
+        self.guidance_label = QLabel("Capture images with the board in different positions and angles")
+        self.guidance_label.setStyleSheet(f"font-size: 13px; color: {COLORS['primary']};")
+        self.guidance_label.setWordWrap(True)
+        guidance_layout.addWidget(self.guidance_label)
+
+        # Coverage indicator (compact display of what's been covered)
+        self.coverage_label = QLabel("")
+        self.coverage_label.setStyleSheet(f"font-size: 11px; color: {COLORS['text_muted']};")
+        guidance_layout.addWidget(self.coverage_label)
+
+        main_layout.addWidget(guidance_frame)
 
         # Bottom buttons
         button_layout = QHBoxLayout()
@@ -458,9 +489,12 @@ class IntrinsicCalibrationDialog(QDialog):
         """)
 
     def _update_capture_display(self):
-        """Update capture count and progress bar."""
+        """Update capture count, progress bar, and guidance."""
         self.capture_label.setText(f"Captured: {self.captured_count} / {self.TARGET_IMAGES}")
         self.progress_bar.setValue(self.captured_count)
+
+        # Update capture guidance
+        self._update_guidance()
 
         # Enable calibration button when minimum images reached
         if self.captured_count >= self.MIN_IMAGES:
@@ -469,6 +503,41 @@ class IntrinsicCalibrationDialog(QDialog):
                 self.calibrate_btn.setText(f"Run Calibration ({self.captured_count} images)")
             else:
                 self.calibrate_btn.setText(f"Run Calibration ({self.captured_count} images)")
+
+    def _update_guidance(self):
+        """Update the capture guidance based on current coverage."""
+        # Get guidance from calibrator's coverage analyzer
+        guidance = self.calibrator.get_capture_guidance()
+        coverage = self.calibrator.get_coverage_summary()
+
+        if guidance:
+            self.guidance_label.setText(guidance)
+            self.guidance_label.setStyleSheet(f"font-size: 13px; color: {COLORS['warning']}; font-weight: bold;")
+        elif self.captured_count >= 3:
+            self.guidance_label.setText("Good variety! Continue capturing different positions.")
+            self.guidance_label.setStyleSheet(f"font-size: 13px; color: {COLORS['success']};")
+        else:
+            self.guidance_label.setText("Capture images with the board in different positions and angles")
+            self.guidance_label.setStyleSheet(f"font-size: 13px; color: {COLORS['primary']};")
+
+        # Update coverage summary display
+        if self.captured_count >= 1:
+            positions = coverage.get('positions', {})
+            pos_summary = []
+            for pos in ['center', 'left', 'right', 'top', 'bottom']:
+                count = positions.get(pos, 0)
+                if count > 0:
+                    pos_summary.append(f"{pos[0].upper()}:{count}")
+
+            scales = coverage.get('scales', {})
+            scale_summary = []
+            for scale in ['close', 'medium', 'far']:
+                count = scales.get(scale, 0)
+                if count > 0:
+                    scale_summary.append(f"{scale[0].upper()}:{count}")
+
+            coverage_text = f"Position: {' '.join(pos_summary) or 'none'}  |  Distance: {' '.join(scale_summary) or 'none'}"
+            self.coverage_label.setText(coverage_text)
 
     def _on_run_calibration(self):
         """Run the calibration with captured images."""

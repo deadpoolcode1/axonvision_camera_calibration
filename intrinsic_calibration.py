@@ -701,45 +701,323 @@ class ChArUcoDetector:
         return charuco_corners, charuco_ids, annotated
 
 
+class CoverageAnalyzer:
+    """
+    Analyzes calibration image coverage to provide capture guidance.
+
+    Tracks:
+    - Position coverage: center, left, right, top, bottom
+    - Tilt coverage: level, tilted-left, tilted-right, tilted-up, tilted-down
+    - Scale coverage: close, medium, far
+    """
+
+    # Region thresholds (normalized 0-1 coordinates)
+    POSITION_THRESHOLD = 0.25  # Distance from center to consider edge region
+    TILT_THRESHOLD = 0.15  # Aspect ratio deviation to consider tilted
+
+    # Coverage tracking
+    POSITIONS = ['center', 'left', 'right', 'top', 'bottom']
+    TILTS = ['level', 'tilted_left', 'tilted_right', 'tilted_up', 'tilted_down']
+    SCALES = ['close', 'medium', 'far']
+
+    def __init__(self):
+        # Track coverage counts for each category
+        self.position_counts = {pos: 0 for pos in self.POSITIONS}
+        self.tilt_counts = {tilt: 0 for tilt in self.TILTS}
+        self.scale_counts = {scale: 0 for scale in self.SCALES}
+        self.total_captures = 0
+        self.image_size: Optional[Tuple[int, int]] = None
+
+    def analyze_detection(self, corners: np.ndarray, image_size: Tuple[int, int]) -> Dict[str, str]:
+        """
+        Analyze a detection and return its characteristics.
+
+        Args:
+            corners: Detected corner positions (N, 1, 2) or (N, 2)
+            image_size: (width, height) of image
+
+        Returns:
+            Dict with 'position', 'tilt', and 'scale' classifications
+        """
+        self.image_size = image_size
+        width, height = image_size
+
+        # Reshape corners to (N, 2)
+        pts = corners.reshape(-1, 2)
+
+        # Calculate centroid
+        centroid_x = np.mean(pts[:, 0])
+        centroid_y = np.mean(pts[:, 1])
+
+        # Normalize to 0-1
+        norm_x = centroid_x / width
+        norm_y = centroid_y / height
+
+        # Determine position
+        position = self._classify_position(norm_x, norm_y)
+
+        # Calculate bounding box for tilt and scale analysis
+        min_x, min_y = np.min(pts, axis=0)
+        max_x, max_y = np.max(pts, axis=0)
+        bbox_width = max_x - min_x
+        bbox_height = max_y - min_y
+
+        # Determine tilt from bounding box aspect ratio and orientation
+        tilt = self._classify_tilt(pts, bbox_width, bbox_height)
+
+        # Determine scale from bounding box area relative to image
+        scale = self._classify_scale(bbox_width, bbox_height, width, height)
+
+        return {'position': position, 'tilt': tilt, 'scale': scale}
+
+    def add_detection(self, corners: np.ndarray, image_size: Tuple[int, int]):
+        """Add a detection and update coverage tracking."""
+        analysis = self.analyze_detection(corners, image_size)
+
+        self.position_counts[analysis['position']] += 1
+        self.tilt_counts[analysis['tilt']] += 1
+        self.scale_counts[analysis['scale']] += 1
+        self.total_captures += 1
+
+        return analysis
+
+    def _classify_position(self, norm_x: float, norm_y: float) -> str:
+        """Classify position based on normalized centroid."""
+        # Check if clearly in a corner/edge region
+        if norm_x < 0.5 - self.POSITION_THRESHOLD:
+            if abs(norm_y - 0.5) < self.POSITION_THRESHOLD:
+                return 'left'
+        elif norm_x > 0.5 + self.POSITION_THRESHOLD:
+            if abs(norm_y - 0.5) < self.POSITION_THRESHOLD:
+                return 'right'
+
+        if norm_y < 0.5 - self.POSITION_THRESHOLD:
+            if abs(norm_x - 0.5) < self.POSITION_THRESHOLD:
+                return 'top'
+        elif norm_y > 0.5 + self.POSITION_THRESHOLD:
+            if abs(norm_x - 0.5) < self.POSITION_THRESHOLD:
+                return 'bottom'
+
+        return 'center'
+
+    def _classify_tilt(self, pts: np.ndarray, bbox_width: float, bbox_height: float) -> str:
+        """
+        Classify tilt based on the detected corner pattern.
+        Uses PCA to find the principal axis orientation.
+        """
+        if len(pts) < 4:
+            return 'level'
+
+        # Use PCA to find orientation
+        centered = pts - np.mean(pts, axis=0)
+        cov = np.cov(centered.T)
+        eigenvalues, eigenvectors = np.linalg.eig(cov)
+
+        # Get principal axis angle
+        principal_idx = np.argmax(eigenvalues)
+        principal_vec = eigenvectors[:, principal_idx]
+        angle = np.arctan2(principal_vec[1], principal_vec[0])
+        angle_deg = np.degrees(angle)
+
+        # Normalize angle to -90 to 90 range
+        while angle_deg > 90:
+            angle_deg -= 180
+        while angle_deg < -90:
+            angle_deg += 180
+
+        # Calculate aspect ratio deviation from expected
+        aspect_ratio = bbox_width / max(bbox_height, 1)
+
+        # Classify based on angle and aspect ratio
+        tilt_threshold_deg = 10
+
+        if abs(angle_deg) < tilt_threshold_deg and 0.7 < aspect_ratio < 1.4:
+            return 'level'
+        elif angle_deg > tilt_threshold_deg:
+            return 'tilted_right'
+        elif angle_deg < -tilt_threshold_deg:
+            return 'tilted_left'
+        elif aspect_ratio > 1.4:
+            return 'tilted_up'  # Board appears wider (tilted toward camera top/bottom)
+        elif aspect_ratio < 0.7:
+            return 'tilted_down'
+
+        return 'level'
+
+    def _classify_scale(self, bbox_width: float, bbox_height: float,
+                        img_width: int, img_height: int) -> str:
+        """Classify scale based on bounding box size relative to image."""
+        # Calculate area ratio
+        bbox_area = bbox_width * bbox_height
+        img_area = img_width * img_height
+        area_ratio = bbox_area / img_area
+
+        # Classify based on area coverage
+        if area_ratio > 0.25:  # Board covers >25% of image
+            return 'close'
+        elif area_ratio > 0.08:  # Board covers 8-25% of image
+            return 'medium'
+        else:
+            return 'far'
+
+    def get_coverage_summary(self) -> Dict[str, Dict[str, int]]:
+        """Get summary of all coverage counts."""
+        return {
+            'positions': self.position_counts.copy(),
+            'tilts': self.tilt_counts.copy(),
+            'scales': self.scale_counts.copy(),
+            'total': self.total_captures
+        }
+
+    def get_missing_coverage(self, min_count: int = 1) -> List[str]:
+        """
+        Get list of coverage areas that need more captures.
+
+        Args:
+            min_count: Minimum captures needed for each category
+
+        Returns:
+            List of suggestions for what to capture next
+        """
+        missing = []
+
+        # Check positions
+        for pos in self.POSITIONS:
+            if self.position_counts[pos] < min_count:
+                missing.append(f"board in {pos.upper()} of frame")
+
+        # Check tilts (only require some tilt coverage, not all types)
+        has_any_tilt = any(self.tilt_counts[t] > 0 for t in self.TILTS if t != 'level')
+        if not has_any_tilt and self.total_captures >= 5:
+            missing.append("board TILTED at an angle")
+
+        # Check scales
+        for scale in self.SCALES:
+            if self.scale_counts[scale] < min_count:
+                if scale == 'close':
+                    missing.append("board CLOSER to camera")
+                elif scale == 'far':
+                    missing.append("board FARTHER from camera")
+
+        return missing
+
+    def get_guidance_message(self) -> str:
+        """
+        Get a human-readable guidance message for the user.
+
+        Returns:
+            Guidance string or empty string if coverage is adequate
+        """
+        if self.total_captures < 3:
+            return ""  # Don't give guidance until we have a few captures
+
+        missing = self.get_missing_coverage(min_count=1)
+
+        if not missing:
+            # Check for imbalanced coverage
+            max_pos = max(self.position_counts.values())
+            min_pos = min(self.position_counts.values())
+            if max_pos > min_pos + 3:
+                # Find underrepresented positions
+                under_positions = [p for p, c in self.position_counts.items() if c < max_pos - 2]
+                if under_positions:
+                    return f"Try: {under_positions[0].upper()} of frame"
+            return ""  # Good coverage!
+
+        # Return the first missing item as suggestion
+        return f"Try: {missing[0]}"
+
+    def get_detailed_guidance(self) -> str:
+        """
+        Get detailed multi-line guidance for calibration.
+
+        Returns:
+            Multi-line guidance string
+        """
+        lines = []
+
+        if self.total_captures < 3:
+            lines.append("Capture more images to get guidance")
+            return "\n".join(lines)
+
+        missing = self.get_missing_coverage(min_count=1)
+
+        if not missing:
+            lines.append("Good coverage so far!")
+
+            # Suggest more variety if we have many captures
+            if self.total_captures >= 10:
+                # Find least covered areas
+                min_pos_count = min(self.position_counts.values())
+                weak_positions = [p for p, c in self.position_counts.items() if c == min_pos_count]
+                if weak_positions and min_pos_count < 3:
+                    lines.append(f"Could use more: {', '.join(weak_positions)}")
+        else:
+            lines.append("Suggested next captures:")
+            for item in missing[:3]:  # Show top 3 suggestions
+                lines.append(f"  • {item}")
+
+        return "\n".join(lines)
+
+
 class IntrinsicCalibrator:
     """Performs intrinsic calibration from ChArUco detections"""
-    
+
     def __init__(self, board_config: ChArUcoBoardConfig, camera_id: str = "camera_1"):
         self.board_config = board_config
         self.board, _ = board_config.create_board()
         self.camera_id = camera_id
-        
+
         # Collected calibration data
         self.all_charuco_corners: List[np.ndarray] = []
         self.all_charuco_ids: List[np.ndarray] = []
         self.image_size: Optional[Tuple[int, int]] = None
-        
+
+        # Coverage analyzer for capture guidance
+        self.coverage_analyzer = CoverageAnalyzer()
+
         # Results
         self.calibration_result: Optional[dict] = None
         
-    def add_detection(self, corners: np.ndarray, ids: np.ndarray, 
+    def add_detection(self, corners: np.ndarray, ids: np.ndarray,
                       image_size: Tuple[int, int]) -> bool:
         """
         Add a detection to the calibration dataset.
-        
+
         Returns:
             True if detection was accepted, False if rejected
         """
         if corners is None or ids is None:
             return False
-        
+
         if len(corners) < 6:  # Need minimum corners for good calibration
             return False
-        
+
         if self.image_size is None:
             self.image_size = image_size
         elif self.image_size != image_size:
             print(f"Warning: Image size mismatch. Expected {self.image_size}, got {image_size}")
             return False
-        
+
         self.all_charuco_corners.append(corners)
         self.all_charuco_ids.append(ids)
+
+        # Update coverage analyzer for capture guidance
+        self.coverage_analyzer.add_detection(corners, image_size)
+
         return True
+
+    def get_capture_guidance(self) -> str:
+        """Get guidance message for what to capture next."""
+        return self.coverage_analyzer.get_guidance_message()
+
+    def get_detailed_capture_guidance(self) -> str:
+        """Get detailed guidance for calibration coverage."""
+        return self.coverage_analyzer.get_detailed_guidance()
+
+    def get_coverage_summary(self) -> Dict[str, Any]:
+        """Get summary of coverage statistics."""
+        return self.coverage_analyzer.get_coverage_summary()
     
     def get_num_images(self) -> int:
         return len(self.all_charuco_corners)
