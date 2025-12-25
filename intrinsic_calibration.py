@@ -423,14 +423,18 @@ class NetworkCameraSource(ImageSource):
         """Connect to the network camera"""
         import time
 
-        # Start the camera stream via API
+        # First, try to stop any existing stream (in case previous session left it running)
         print(f"Connecting to camera at {self.ip}...")
+        self._stop_stream()
+        time.sleep(0.5)  # Brief pause after stopping
+
+        # Start the camera stream via API
         if not self._start_stream():
             print("Failed to start camera stream via API")
             return False
 
         print("Stream started, connecting via GStreamer...")
-        time.sleep(1.0)  # Give stream time to start
+        time.sleep(1.5)  # Give stream time to start (increased for reliability)
 
         # GStreamer pipeline for OpenCV
         pipeline = (
