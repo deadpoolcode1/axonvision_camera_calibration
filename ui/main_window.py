@@ -18,6 +18,7 @@ from .data_models import (
 )
 from .screens.welcome_screen import WelcomeScreen
 from .screens.platform_config_screen import PlatformConfigScreen
+from .screens.camera_preview_screen import CameraPreviewScreen
 
 
 class MainWindow(QMainWindow):
@@ -66,10 +67,13 @@ class MainWindow(QMainWindow):
         self.welcome_screen = WelcomeScreen(self.data_store)
         self.platform_config_screen = PlatformConfigScreen()
         self.platform_config_screen.set_base_path(self.base_path)
+        self.camera_preview_screen = CameraPreviewScreen()
+        self.camera_preview_screen.set_base_path(self.base_path)
 
         # Add screens to stack
         self.screen_stack.addWidget(self.welcome_screen)  # Index 0
         self.screen_stack.addWidget(self.platform_config_screen)  # Index 1
+        self.screen_stack.addWidget(self.camera_preview_screen)  # Index 2
 
         # Start on welcome screen
         self.screen_stack.setCurrentIndex(0)
@@ -84,6 +88,10 @@ class MainWindow(QMainWindow):
         # Platform config screen signals
         self.platform_config_screen.cancel_requested.connect(self._on_cancel_to_welcome)
         self.platform_config_screen.next_requested.connect(self._on_platform_config_next)
+
+        # Camera preview screen signals
+        self.camera_preview_screen.cancel_requested.connect(self._on_camera_preview_cancel)
+        self.camera_preview_screen.next_requested.connect(self._on_camera_preview_next)
 
     def _on_start_new(self):
         """Handle Start New Calibration from welcome screen."""
@@ -163,19 +171,25 @@ class MainWindow(QMainWindow):
         self.data_store.last_platform_config = config
         self.data_store.save()
 
-        # For now, show info about next steps
-        QMessageBox.information(
-            self,
-            "Platform Configured",
-            f"Platform: {config.platform_type} - {config.platform_id}\n"
-            f"Cameras: {len(config.cameras)}\n\n"
-            "Next screens to be implemented:\n"
-            "- Step 2: Hardware Verification\n"
-            "- Step 3: Intrinsic Calibration\n"
-            "- Step 4: Extrinsic Calibration\n"
-            "- Step 5: Validation\n"
-            "- Step 6: Report Generation"
-        )
+        # Navigate to camera preview screen
+        self.camera_preview_screen.set_config(config)
+        self.screen_stack.setCurrentWidget(self.camera_preview_screen)
+
+        # Verify cameras after screen is shown (with slight delay for UI update)
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(100, self.camera_preview_screen.verify_cameras)
+
+    def _on_camera_preview_cancel(self):
+        """Handle Cancel/Back from camera preview screen - return to platform config."""
+        self.screen_stack.setCurrentWidget(self.platform_config_screen)
+
+    def _on_camera_preview_next(self, config: PlatformConfiguration):
+        """Handle Next from camera preview screen."""
+        self.current_config = config
+
+        # Save updated configuration
+        self.data_store.last_platform_config = config
+        self.data_store.save()
 
     def closeEvent(self, event):
         """Handle window close event."""
