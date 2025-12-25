@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QProgressBar, QMessageBox, QFrame, QSizePolicy
 )
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer, Signal, QEvent
 from PySide6.QtGui import QImage, QPixmap, QKeyEvent
 
 from ..styles import COLORS
@@ -99,33 +99,6 @@ class IntrinsicCalibrationDialog(QDialog):
         header_layout.addWidget(subtitle)
 
         main_layout.addLayout(header_layout)
-
-        # Instructions card
-        instructions_frame = QFrame()
-        instructions_frame.setStyleSheet(f"""
-            QFrame {{
-                background-color: {COLORS['table_header']};
-                border: 1px solid {COLORS['primary']};
-                border-radius: 6px;
-                padding: 10px;
-            }}
-        """)
-        instructions_layout = QVBoxLayout(instructions_frame)
-        instructions_layout.setContentsMargins(15, 10, 15, 10)
-
-        instructions = QLabel(
-            "<b>Instructions:</b><br>"
-            "1. Hold the ChArUco calibration board in view of the camera<br>"
-            "2. Press <b>SPACE</b> to capture an image when the board is detected (green overlay)<br>"
-            "3. Move the board to different positions and angles for best results<br>"
-            "4. Capture at least 10 images (25 recommended) for accurate calibration<br>"
-            "5. Press <b>ESC</b> to cancel at any time"
-        )
-        instructions.setStyleSheet(f"color: {COLORS['text_dark']}; font-size: 13px;")
-        instructions.setWordWrap(True)
-        instructions_layout.addWidget(instructions)
-
-        main_layout.addWidget(instructions_frame)
 
         # Video preview area
         self.video_label = QLabel()
@@ -258,12 +231,17 @@ class IntrinsicCalibrationDialog(QDialog):
         self._stop_camera()
         super().closeEvent(event)
 
+    def event(self, event):
+        """Intercept key events before they reach buttons."""
+        if event.type() == QEvent.KeyPress:
+            if event.key() == Qt.Key_Space:
+                self._on_capture()
+                return True  # Event fully handled, don't propagate to buttons
+        return super().event(event)
+
     def keyPressEvent(self, event: QKeyEvent):
-        """Handle key presses for capture (Space) and cancel (ESC)."""
-        if event.key() == Qt.Key_Space:
-            self._on_capture()
-            event.accept()  # Prevent event from propagating to dialog buttons
-        elif event.key() == Qt.Key_Escape:
+        """Handle key presses for cancel (ESC)."""
+        if event.key() == Qt.Key_Escape:
             self._on_cancel()
             event.accept()
         else:
