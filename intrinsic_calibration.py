@@ -1297,12 +1297,12 @@ Examples:
     parser.add_argument(
         "--camera-id",
         default="camera_1",
-        help="Camera identifier (default: camera_1)"
+        help="Camera identifier (default: camera_1). Output will be saved to camera_intrinsic/camera_intrinsics_<camera_id>.json"
     )
     parser.add_argument(
         "--output", "-o",
-        default="camera_intrinsics.json",
-        help="Output JSON file path (default: camera_intrinsics.json)"
+        default=None,
+        help="Output JSON file path (default: camera_intrinsic/camera_intrinsics_<camera_id>.json)"
     )
     parser.add_argument(
         "--num-images", "-n",
@@ -1541,12 +1541,21 @@ Examples:
             print("Use --network-camera flag for network camera streaming")
             return 1
 
+    # Set default output path based on camera_id if not specified
+    output_path = args.output
+    if output_path is None:
+        # Create camera_intrinsic directory if it doesn't exist
+        intrinsic_dir = Path("camera_intrinsic")
+        intrinsic_dir.mkdir(parents=True, exist_ok=True)
+        output_path = str(intrinsic_dir / f"camera_intrinsics_{args.camera_id}.json")
+        print(f"Output path: {output_path}")
+
     try:
         result = run_calibration(
             image_source=image_source,
             board_config=board_config,
             camera_id=args.camera_id,
-            output_path=args.output,
+            output_path=output_path,
             num_images=args.num_images,
             save_images=args.save_images,
             output_dir=args.image_dir,

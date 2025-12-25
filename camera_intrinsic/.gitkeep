@@ -1,0 +1,2 @@
+# This directory stores intrinsic calibration files
+# Files are named: camera_intrinsics_<camera_id>.json

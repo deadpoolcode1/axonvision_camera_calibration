@@ -19,3 +19,6 @@ reportlab>=4.0.0
 
 # Serial communication for INS hardware (VectorNav)
 pyserial>=3.5
+
+# Qt GUI framework (official Qt for Python)
+PySide6>=6.5.0
