@@ -22,6 +22,7 @@ from ..data_models import (
     PlatformConfiguration, CameraDefinition,
     MOUNTING_POSITIONS, CAMERA_TYPES, CAMERA_MODELS, PLATFORM_TYPES
 )
+from ..dialogs import IntrinsicCalibrationDialog
 
 
 class CameraTableWidget(QTableWidget):
@@ -29,9 +30,10 @@ class CameraTableWidget(QTableWidget):
 
     camera_removed = Signal(int)  # Emits row index when camera is removed
     camera_verify_requested = Signal(int)  # Emits row index when verify is clicked
+    camera_calibrate_requested = Signal(int)  # Emits row index when calibrate is clicked
 
-    COLUMNS = ['#', 'Camera ID', 'Type', 'Camera Model', 'Mounting Position', 'IP Address', 'Intrinsic', 'Verify', 'Action']
-    COLUMN_WIDTHS = [40, 100, 60, 130, 200, 180, 80, 80, 80]
+    COLUMNS = ['#', 'Camera ID', 'Type', 'Camera Model', 'Mounting Position', 'IP Address', 'Intrinsic', 'Calibrate', 'Verify', 'Action']
+    COLUMN_WIDTHS = [40, 100, 60, 130, 180, 160, 70, 80, 70, 70]
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -124,17 +126,23 @@ class CameraTableWidget(QTableWidget):
         intrinsic_layout.addWidget(intrinsic_label, alignment=Qt.AlignCenter)
         self.setCellWidget(row, 6, intrinsic_container)
 
+        # Calibrate button
+        calibrate_btn = QPushButton("Calibrate")
+        calibrate_btn.setObjectName("calibrate_button")
+        calibrate_btn.clicked.connect(lambda checked, r=row: self._on_calibrate_clicked(r))
+        self.setCellWidget(row, 7, calibrate_btn)
+
         # Verify button
         verify_btn = QPushButton("Verify")
         verify_btn.setObjectName("verify_button")
         verify_btn.clicked.connect(lambda checked, r=row: self._on_verify_clicked(r))
-        self.setCellWidget(row, 7, verify_btn)
+        self.setCellWidget(row, 8, verify_btn)
 
         # Remove button
         remove_btn = QPushButton("Remove")
         remove_btn.setObjectName("remove_button")
         remove_btn.clicked.connect(lambda checked, r=row: self._on_remove_clicked(r))
-        self.setCellWidget(row, 8, remove_btn)
+        self.setCellWidget(row, 9, remove_btn)
 
         # Adjust row height
         self.setRowHeight(row, 45)
@@ -164,6 +172,10 @@ class CameraTableWidget(QTableWidget):
     def _on_ip_changed(self, row: int, text: str):
         """Handle IP address change."""
         pass
+
+    def _on_calibrate_clicked(self, row: int):
+        """Handle calibrate button click."""
+        self.camera_calibrate_requested.emit(row)
 
     def _on_verify_clicked(self, row: int):
         """Handle verify button click."""
@@ -313,6 +325,7 @@ class PlatformConfigScreen(QWidget):
         self.camera_table = CameraTableWidget()
         self.camera_table.camera_removed.connect(self._on_camera_removed)
         self.camera_table.camera_verify_requested.connect(self._on_camera_verify)
+        self.camera_table.camera_calibrate_requested.connect(self._on_camera_calibrate)
         self.camera_table.setMinimumHeight(200)
         camera_section.addWidget(self.camera_table)
 
@@ -441,6 +454,71 @@ class PlatformConfigScreen(QWidget):
             msg = f"Camera {camera_num} verification passed!\n\n"
             msg += "\n".join(f"  + {item}" for item in success_items)
             QMessageBox.information(self, f"Camera {camera_num} - Verification OK", msg)
+
+    def _on_camera_calibrate(self, row: int):
+        """Launch intrinsic calibration dialog for a camera."""
+        # Get current camera data from UI
+        camera_data = self.camera_table.get_camera_data(row)
+        camera_id = camera_data.get('camera_id', '')
+        ip_address = camera_data.get('ip_address', '')
+        camera_num = camera_data.get('camera_number', row + 1)
+
+        if not camera_id:
+            QMessageBox.warning(
+                self,
+                "Invalid Camera",
+                "Please enter a Camera ID before calibrating."
+            )
+            return
+
+        if not ip_address:
+            QMessageBox.warning(
+                self,
+                "Invalid IP Address",
+                "Please enter an IP address for the camera before calibrating."
+            )
+            return
+
+        # Check if camera already has calibration
+        intrinsic_path = Path(self.base_path) / f"camera_intrinsic/camera_intrinsics_{camera_id}.json"
+        if intrinsic_path.exists():
+            reply = QMessageBox.question(
+                self,
+                "Existing Calibration Found",
+                f"Camera '{camera_id}' already has an intrinsic calibration file.\n\n"
+                "Do you want to perform a new calibration?\n"
+                "(This will overwrite the existing calibration)",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+
+        # Launch calibration dialog
+        dialog = IntrinsicCalibrationDialog(
+            camera_id=camera_id,
+            ip_address=ip_address,
+            base_path=self.base_path,
+            parent=self
+        )
+
+        # Connect signal to update status after calibration
+        dialog.calibration_completed.connect(
+            lambda success, msg: self._on_calibration_completed(row, success, msg)
+        )
+
+        dialog.exec()
+
+    def _on_calibration_completed(self, row: int, success: bool, message: str):
+        """Handle calibration completion."""
+        if success:
+            # Refresh intrinsic status for this row
+            camera_data = self.camera_table.get_camera_data(row)
+            camera_id = camera_data.get('camera_id', '')
+            intrinsic_file_path = f"camera_intrinsic/camera_intrinsics_{camera_id}.json"
+            full_path = Path(self.base_path) / intrinsic_file_path
+            has_intrinsic = full_path.exists()
+            self.camera_table.update_intrinsic_status(row, has_intrinsic, intrinsic_file_path)
 
     def _ping_device(self, ip_address: str) -> bool:
         """Ping a device to check if it's reachable."""
