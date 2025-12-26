@@ -108,19 +108,9 @@ class MainWindow(QMainWindow):
 
     def _on_start_new(self):
         """Handle Start New Calibration from welcome screen."""
-        # Create fresh configuration
+        # Create fresh configuration with no default cameras
+        # User can add cameras as needed using "+ Add Camera" button
         self.current_config = PlatformConfiguration()
-
-        # Add 4 default cameras
-        for _ in range(4):
-            self.current_config.add_camera()
-
-        # Set default mounting positions for common setup
-        if len(self.current_config.cameras) >= 4:
-            self.current_config.cameras[0].mounting_position = "Front Center"
-            self.current_config.cameras[1].mounting_position = "Rear Center"
-            self.current_config.cameras[2].mounting_position = "Left Center"
-            self.current_config.cameras[3].mounting_position = "Right Center"
 
         # Update platform config screen and navigate
         self.platform_config_screen.set_config(self.current_config)
