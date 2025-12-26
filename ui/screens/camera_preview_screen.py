@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QTableWidget, QTableWidgetItem, QHeaderView,
     QAbstractItemView
 )
-from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtCore import Qt, Signal, QTimer, QThread, QObject
 from PySide6.QtGui import QPixmap, QImage
 
 import numpy as np
@@ -38,6 +38,106 @@ except ImportError:
     NetworkCameraSource = None
 
 from ..dialogs import IntrinsicCalibrationDialog
+
+
+class CameraConnectionWorker(QObject):
+    """Worker for threaded camera ping and connection operations."""
+
+    # Signals to update UI from thread
+    ping_result = Signal(int, bool)  # camera_number, ping_status
+    connection_result = Signal(int, bool, str)  # camera_number, success, error_message
+    all_complete = Signal()  # Emitted when all cameras have been processed
+
+    def __init__(self, camera_ips: dict, parent=None):
+        """
+        Initialize worker with camera IPs.
+
+        Args:
+            camera_ips: Dict mapping camera_number to ip_address
+        """
+        super().__init__(parent)
+        self.camera_ips = camera_ips
+        self._is_running = True
+
+    def stop(self):
+        """Stop the worker."""
+        self._is_running = False
+
+    def run_ping_tests(self):
+        """Run ping tests for all cameras in background."""
+        for camera_number, ip_address in self.camera_ips.items():
+            if not self._is_running:
+                break
+            ping_ok = self._ping_device(ip_address)
+            self.ping_result.emit(camera_number, ping_ok)
+
+        self.all_complete.emit()
+
+    def _ping_device(self, ip_address: str) -> bool:
+        """Ping a device to check if it's reachable."""
+        if not ip_address:
+            return False
+
+        try:
+            param = '-n' if platform.system().lower() == 'windows' else '-c'
+            timeout_param = '-w' if platform.system().lower() == 'windows' else '-W'
+
+            result = subprocess.run(
+                ['ping', param, '1', timeout_param, '2', ip_address],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5
+            )
+            return result.returncode == 0
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, FileNotFoundError):
+            return False
+
+
+class CameraStreamWorker(QObject):
+    """Worker for connecting a single camera stream in background."""
+
+    connection_ready = Signal(bool, str)  # success, error_message
+
+    def __init__(self, ip_address: str, parent=None):
+        super().__init__(parent)
+        self.ip_address = ip_address
+        self.camera_source = None
+        self._is_running = True
+
+    def stop(self):
+        """Stop the worker."""
+        self._is_running = False
+
+    def connect_camera(self):
+        """Connect to camera in background thread."""
+        if not self.ip_address or not self._is_running:
+            self.connection_ready.emit(False, "No IP address")
+            return
+
+        try:
+            if NetworkCameraSource is None:
+                self.connection_ready.emit(False, "NetworkCameraSource not available")
+                return
+
+            self.camera_source = NetworkCameraSource(
+                ip=self.ip_address,
+                api_port=5000,
+                multicast_host="239.255.0.1",
+                stream_port=5010,
+                timeout=10.0
+            )
+
+            if self.camera_source.connect():
+                self.connection_ready.emit(True, "")
+            else:
+                error_msg = self.camera_source.last_error or "Connection failed"
+                self.connection_ready.emit(False, error_msg)
+        except Exception as e:
+            self.connection_ready.emit(False, str(e))
+
+    def get_camera_source(self):
+        """Get the connected camera source."""
+        return self.camera_source
 
 
 class SensorDataWidget(QFrame):
@@ -186,6 +286,10 @@ class CameraPreviewCard(QFrame):
         self.timer.timeout.connect(self._update_frame)
         self._is_streaming = False
 
+        # Threading for camera connection
+        self._stream_thread: Optional[QThread] = None
+        self._stream_worker: Optional[CameraStreamWorker] = None
+
         self._setup_ui()
 
     def _setup_ui(self):
@@ -322,42 +426,64 @@ class CameraPreviewCard(QFrame):
         self._update_intrinsic_display()
 
     def start_streaming(self):
-        """Start camera streaming."""
+        """Start camera streaming in a background thread."""
         if self._is_streaming or NetworkCameraSource is None:
             return
         if not self.ip_address:
             self.video_label.setText("No IP address")
             return
 
+        # Clean up any existing thread
+        self._cleanup_stream_thread()
+
         self.video_label.setText("Connecting...")
-        try:
-            self.camera_source = NetworkCameraSource(
-                ip=self.ip_address,
-                api_port=5000,
-                multicast_host="239.255.0.1",
-                stream_port=5010,
-                timeout=10.0
-            )
-            if self.camera_source.connect():
-                self._is_streaming = True
-                self.timer.start(33)  # ~30 FPS
-            else:
-                error_msg = self.camera_source.last_error or "Connection failed"
-                self.video_label.setText(f"Error:\n{error_msg[:30]}...")
-                self.video_label.setStyleSheet(f"""
-                    background-color: #1a1a1a;
-                    border: 1px solid {COLORS['danger']};
-                    border-radius: 4px;
-                    color: {COLORS['danger']};
-                    font-size: 10px;
-                """)
-        except Exception as e:
-            self.video_label.setText(f"Error:\n{str(e)[:30]}...")
+
+        # Create worker and thread for background connection
+        self._stream_thread = QThread()
+        self._stream_worker = CameraStreamWorker(self.ip_address)
+        self._stream_worker.moveToThread(self._stream_thread)
+
+        # Connect signals
+        self._stream_thread.started.connect(self._stream_worker.connect_camera)
+        self._stream_worker.connection_ready.connect(self._on_stream_connected)
+
+        # Start the thread
+        self._stream_thread.start()
+
+    def _on_stream_connected(self, success: bool, error_msg: str):
+        """Handle camera connection result from worker thread."""
+        if success and self._stream_worker:
+            self.camera_source = self._stream_worker.get_camera_source()
+            self._is_streaming = True
+            self.timer.start(33)  # ~30 FPS
+        else:
+            self.video_label.setText(f"Error:\n{error_msg[:30]}...")
+            self.video_label.setStyleSheet(f"""
+                background-color: #1a1a1a;
+                border: 1px solid {COLORS['danger']};
+                border-radius: 4px;
+                color: {COLORS['danger']};
+                font-size: 10px;
+            """)
+
+        # Clean up thread after connection attempt
+        self._cleanup_stream_thread()
+
+    def _cleanup_stream_thread(self):
+        """Clean up the stream worker thread."""
+        if self._stream_worker:
+            self._stream_worker.stop()
+            self._stream_worker = None
+        if self._stream_thread:
+            self._stream_thread.quit()
+            self._stream_thread.wait(1000)  # Wait up to 1 second
+            self._stream_thread = None
 
     def stop_streaming(self):
         """Stop camera streaming."""
         self.timer.stop()
         self._is_streaming = False
+        self._cleanup_stream_thread()
         if self.camera_source:
             self.camera_source.release()
             self.camera_source = None
@@ -402,6 +528,12 @@ class CameraPreviewScreen(QWidget):
         self.base_path = "."
         self.camera_cards = []
         self.ping_failed_cameras = []
+
+        # Threading for camera verification
+        self._ping_thread: Optional[QThread] = None
+        self._ping_worker: Optional[CameraConnectionWorker] = None
+        self._ping_results: dict = {}  # camera_number -> ping_status
+
         self._setup_ui()
 
     def _setup_ui(self):
@@ -660,25 +792,55 @@ class CameraPreviewScreen(QWidget):
         self.cameras_layout.setColumnStretch(max_cols, 1)
 
     def verify_cameras(self):
-        """Verify all cameras are reachable and check intrinsic status."""
+        """Verify all cameras are reachable and check intrinsic status (threaded)."""
         self.ping_failed_cameras.clear()
+        self._ping_results.clear()
         self.next_btn.setEnabled(False)
+        self.refresh_btn.setEnabled(False)  # Disable refresh during testing
 
         self._update_status("testing", "Testing camera connectivity...")
 
-        # Test each camera
-        all_connected = True
-        all_calibrated = True
+        # Clean up any existing ping thread
+        self._cleanup_ping_thread()
 
-        for card in self.camera_cards:
-            ping_ok = self._ping_device(card.ip_address)
+        # Build camera IPs dict
+        camera_ips = {card.camera_number: card.ip_address for card in self.camera_cards}
+
+        # Create worker and thread for background ping tests
+        self._ping_thread = QThread()
+        self._ping_worker = CameraConnectionWorker(camera_ips)
+        self._ping_worker.moveToThread(self._ping_thread)
+
+        # Connect signals
+        self._ping_thread.started.connect(self._ping_worker.run_ping_tests)
+        self._ping_worker.ping_result.connect(self._on_ping_result)
+        self._ping_worker.all_complete.connect(self._on_all_pings_complete)
+
+        # Start the thread
+        self._ping_thread.start()
+
+    def _on_ping_result(self, camera_number: int, ping_ok: bool):
+        """Handle individual ping result from worker thread."""
+        self._ping_results[camera_number] = ping_ok
+
+        # Update the card UI
+        card = next((c for c in self.camera_cards if c.camera_number == camera_number), None)
+        if card:
             card.set_ping_status(ping_ok)
-
             if not ping_ok:
-                all_connected = False
                 self.ping_failed_cameras.append(card.camera_id)
 
-            # Check intrinsic calibration
+    def _on_all_pings_complete(self):
+        """Handle completion of all ping tests."""
+        # Clean up thread
+        self._cleanup_ping_thread()
+
+        # Re-enable refresh button
+        self.refresh_btn.setEnabled(True)
+
+        # Check intrinsic calibration status (this is fast, no threading needed)
+        all_calibrated = True
+        for card in self.camera_cards:
             camera = next((c for c in self.config.cameras if c.camera_number == card.camera_number), None)
             if camera:
                 has_intrinsic = camera.has_intrinsic_calibration(self.base_path)
@@ -688,6 +850,9 @@ class CameraPreviewScreen(QWidget):
 
         # Update table intrinsic status
         self._populate_config_table()
+
+        # Check connection results
+        all_connected = len(self.ping_failed_cameras) == 0
 
         # Update status message
         if not all_connected:
@@ -706,8 +871,18 @@ class CameraPreviewScreen(QWidget):
             self._update_status("success", "All cameras connected and calibrated!")
             self.next_btn.setEnabled(True)
 
-        # Start video streaming for connected cameras
+        # Start video streaming for connected cameras (each starts its own thread)
         self.start_all_streams()
+
+    def _cleanup_ping_thread(self):
+        """Clean up the ping worker thread."""
+        if self._ping_worker:
+            self._ping_worker.stop()
+            self._ping_worker = None
+        if self._ping_thread:
+            self._ping_thread.quit()
+            self._ping_thread.wait(1000)  # Wait up to 1 second
+            self._ping_thread = None
 
     def _ping_device(self, ip_address: str) -> bool:
         """Ping a device to check if it's reachable."""
@@ -900,6 +1075,7 @@ class CameraPreviewScreen(QWidget):
 
     def hideEvent(self, event):
         """Stop all streams and sensor updates when screen is hidden."""
+        self._cleanup_ping_thread()
         self.stop_all_streams()
         self.sensor_widget.stop_updates()
         super().hideEvent(event)
