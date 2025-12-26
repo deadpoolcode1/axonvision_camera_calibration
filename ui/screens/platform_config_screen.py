@@ -292,6 +292,44 @@ class CameraPreviewWidget(QFrame):
             self.camera_source.release()
             self.camera_source = None
 
+    def stop_streaming_async(self):
+        """Stop camera streaming without blocking.
+
+        This method is safe to use when the widget is about to be deleted.
+        The thread and worker are moved to module-level orphaned list for async cleanup.
+        """
+        self.timer.stop()
+        self._restart_debounce.stop()
+        self._pending_ip = None
+        self._is_streaming = False
+        self._is_connecting = False
+
+        worker = self._stream_worker
+        thread = self._stream_thread
+
+        if worker:
+            # Disconnect signals to prevent callbacks to deleted widget
+            try:
+                worker.connection_ready.disconnect(self._on_stream_connected)
+            except (RuntimeError, TypeError):
+                pass
+            worker.stop()
+
+        if thread:
+            thread.quit()
+            # Move to module-level orphaned list for async cleanup
+            # This prevents GC crash and allows thread to finish gracefully
+            orphan = (thread, worker)
+            _orphaned_threads.append(orphan)
+            thread.finished.connect(lambda o=orphan: _on_orphaned_thread_finished(o))
+
+        self._stream_thread = None
+        self._stream_worker = None
+
+        if self.camera_source:
+            self.camera_source.release()
+            self.camera_source = None
+
     def _update_frame(self):
         """Update video frame."""
         if not self.camera_source:
@@ -724,8 +762,8 @@ class PlatformConfigScreen(QWidget):
 
         # Stop and remove only the specific preview widget
         preview_to_remove = self.preview_widgets[index]
-        # Wait for thread to finish before deleting widget to avoid crash
-        preview_to_remove.stop_streaming(wait_for_finish=True)
+        # Use async cleanup to avoid blocking UI - threads are moved to orphaned list
+        preview_to_remove.stop_streaming_async()
         self.preview_grid.removeWidget(preview_to_remove)
         preview_to_remove.deleteLater()
         self.preview_widgets.pop(index)
