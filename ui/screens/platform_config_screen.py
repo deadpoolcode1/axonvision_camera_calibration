@@ -28,7 +28,7 @@ from ..styles import COLORS
 from ..data_models import (
     PlatformConfiguration, CameraDefinition,
     MOUNTING_POSITIONS, CAMERA_TYPES, CAMERA_MODELS, PLATFORM_TYPES,
-    CAMERA_ROLES, VALID_3_1_POSITIONS, MAX_CAMERAS, MAX_AI_CENTRAL_CAMERAS
+    VALID_3_1_POSITIONS, MAX_CAMERAS, MAX_AI_CENTRAL_CAMERAS
 )
 
 # Import camera streaming from intrinsic_calibration module
@@ -254,8 +254,8 @@ class CameraTableWidget(QTableWidget):
     camera_removed = Signal(int)
     camera_data_changed = Signal()  # Emitted when any camera data changes
 
-    COLUMNS = ['#', 'Camera ID', 'Type', 'Role', 'Camera Model', 'Mounting Position', 'IP Address', 'Action']
-    COLUMN_WIDTHS = [40, 100, 90, 80, 110, 160, 140, 80]
+    COLUMNS = ['#', 'Camera ID', 'Type', 'Camera Model', 'Mounting Position', 'IP Address', 'Action']
+    COLUMN_WIDTHS = [40, 100, 110, 110, 160, 140, 80]
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -274,11 +274,10 @@ class CameraTableWidget(QTableWidget):
         header.setSectionResizeMode(0, QHeaderView.Fixed)    # #
         header.setSectionResizeMode(1, QHeaderView.Fixed)    # Camera ID
         header.setSectionResizeMode(2, QHeaderView.Fixed)    # Type
-        header.setSectionResizeMode(3, QHeaderView.Fixed)    # Role
-        header.setSectionResizeMode(4, QHeaderView.Fixed)    # Camera Model
-        header.setSectionResizeMode(5, QHeaderView.Stretch)  # Mounting Position
-        header.setSectionResizeMode(6, QHeaderView.Stretch)  # IP Address
-        header.setSectionResizeMode(7, QHeaderView.Fixed)    # Action
+        header.setSectionResizeMode(3, QHeaderView.Fixed)    # Camera Model
+        header.setSectionResizeMode(4, QHeaderView.Stretch)  # Mounting Position
+        header.setSectionResizeMode(5, QHeaderView.Stretch)  # IP Address
+        header.setSectionResizeMode(6, QHeaderView.Fixed)    # Action
 
         self.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -309,19 +308,9 @@ class CameraTableWidget(QTableWidget):
         type_combo = QComboBox()
         type_combo.addItems(CAMERA_TYPES)
         type_combo.setCurrentText(camera.camera_type)
-        type_combo.setToolTip("Select camera type: AI Central (1 max), 1:1, or 3:1")
+        type_combo.setToolTip("Select camera type: AI CENTRAL (1 max), 1:1, 3:1 manager, or 3:1 worker")
         type_combo.currentTextChanged.connect(lambda text, r=row: self._on_type_changed(r, text))
         self.setCellWidget(row, 2, type_combo)
-
-        # Role dropdown (Manager/Worker for 3:1 only)
-        role_combo = QComboBox()
-        role_combo.addItem("")  # Empty option
-        role_combo.addItems(CAMERA_ROLES)
-        role_combo.setCurrentText(camera.camera_role if camera.camera_type == "3:1" else "")
-        role_combo.setToolTip("Select role (Manager/Worker) - only for 3:1 cameras")
-        role_combo.setEnabled(camera.camera_type == "3:1")
-        role_combo.currentTextChanged.connect(lambda: self.camera_data_changed.emit())
-        self.setCellWidget(row, 3, role_combo)
 
         # Model dropdown
         model_combo = QComboBox()
@@ -329,7 +318,7 @@ class CameraTableWidget(QTableWidget):
         model_combo.setCurrentText(camera.camera_model)
         model_combo.setToolTip("Select camera hardware model")
         model_combo.currentTextChanged.connect(lambda: self.camera_data_changed.emit())
-        self.setCellWidget(row, 4, model_combo)
+        self.setCellWidget(row, 3, model_combo)
 
         # Mounting Position dropdown
         position_combo = QComboBox()
@@ -337,14 +326,14 @@ class CameraTableWidget(QTableWidget):
         position_combo.setCurrentText(camera.mounting_position)
         position_combo.setToolTip("Select mounting position. 3:1 cameras can only be Front/Rear Center")
         position_combo.currentTextChanged.connect(lambda text, r=row: self._on_position_changed(r, text))
-        self.setCellWidget(row, 5, position_combo)
+        self.setCellWidget(row, 4, position_combo)
 
         # IP Address input
         ip_edit = QLineEdit(camera.ip_address)
         ip_edit.setPlaceholderText("192.168.1.xxx")
         ip_edit.setToolTip("Camera IP address for network connection")
         ip_edit.textChanged.connect(lambda: self.camera_data_changed.emit())
-        self.setCellWidget(row, 6, ip_edit)
+        self.setCellWidget(row, 5, ip_edit)
 
         # Remove button
         remove_btn = QPushButton("Remove")
@@ -356,25 +345,17 @@ class CameraTableWidget(QTableWidget):
         remove_layout = QHBoxLayout(remove_container)
         remove_layout.setContentsMargins(2, 2, 2, 2)
         remove_layout.addWidget(remove_btn, alignment=Qt.AlignCenter)
-        self.setCellWidget(row, 7, remove_container)
+        self.setCellWidget(row, 6, remove_container)
 
         self.setRowHeight(row, 45)
         return row
 
     def _on_type_changed(self, row: int, text: str):
         """Handle camera type change."""
-        role_combo = self.cellWidget(row, 3)
-        position_combo = self.cellWidget(row, 5)
+        position_combo = self.cellWidget(row, 4)
 
-        if role_combo:
-            if text == "3:1":
-                role_combo.setEnabled(True)
-            else:
-                role_combo.setEnabled(False)
-                role_combo.setCurrentText("")
-
-        # Validate position for 3:1
-        if text == "3:1" and position_combo:
+        # Validate position for 3:1 types (manager and worker)
+        if text.startswith("3:1") and position_combo:
             current_pos = position_combo.currentText()
             if current_pos not in VALID_3_1_POSITIONS and current_pos != "N/A":
                 position_combo.setCurrentText("N/A")
@@ -398,10 +379,9 @@ class CameraTableWidget(QTableWidget):
             'camera_number': int(self.item(row, 0).text()),
             'camera_id': self.cellWidget(row, 1).text(),
             'camera_type': self.cellWidget(row, 2).currentText(),
-            'camera_role': self.cellWidget(row, 3).currentText(),
-            'camera_model': self.cellWidget(row, 4).currentText(),
-            'mounting_position': self.cellWidget(row, 5).currentText(),
-            'ip_address': self.cellWidget(row, 6).text(),
+            'camera_model': self.cellWidget(row, 3).currentText(),
+            'mounting_position': self.cellWidget(row, 4).currentText(),
+            'ip_address': self.cellWidget(row, 5).text(),
         }
 
     def get_all_cameras(self) -> list:
@@ -418,7 +398,7 @@ class CameraTableWidget(QTableWidget):
     def highlight_duplicate_positions(self, duplicate_rows: list):
         """Highlight rows with duplicate positions in red."""
         for row in range(self.rowCount()):
-            position_combo = self.cellWidget(row, 5)
+            position_combo = self.cellWidget(row, 4)
             if position_combo:
                 if row in duplicate_rows:
                     position_combo.setStyleSheet(f"border: 2px solid {COLORS['danger']}; background-color: #FFEBEE;")
@@ -673,6 +653,35 @@ class PlatformConfigScreen(QWidget):
         if self.isVisible():
             preview.start_streaming()
 
+    def _remove_preview_at_index(self, index: int):
+        """Remove a specific preview widget and rearrange remaining ones without stopping valid streams."""
+        if index < 0 or index >= len(self.preview_widgets):
+            return
+
+        # Stop and remove only the specific preview widget
+        preview_to_remove = self.preview_widgets[index]
+        preview_to_remove.stop_streaming()
+        self.preview_grid.removeWidget(preview_to_remove)
+        preview_to_remove.deleteLater()
+        self.preview_widgets.pop(index)
+
+        # Rearrange remaining widgets in the grid without stopping their streams
+        # First, remove all widgets from layout (but don't delete them)
+        for widget in self.preview_widgets:
+            self.preview_grid.removeWidget(widget)
+
+        # Re-add them in correct positions
+        for i, widget in enumerate(self.preview_widgets):
+            row = i // 2
+            col = i % 2
+            self.preview_grid.addWidget(widget, row, col)
+
+        # Update camera info for remaining previews (camera IDs may have changed)
+        for i, preview in enumerate(self.preview_widgets):
+            if i < len(self.config.cameras):
+                camera = self.config.cameras[i]
+                preview.update_camera_info(camera.camera_id, camera.ip_address)
+
     def _on_camera_removed(self, row: int):
         """Remove a camera from the configuration."""
         if self.camera_table.rowCount() <= 1:
@@ -686,7 +695,8 @@ class PlatformConfigScreen(QWidget):
         self.config.remove_camera(row)
         self._reload_camera_table()
         self._update_camera_count()
-        self._rebuild_preview_grid()
+        # Only remove the specific preview, keep other valid connections
+        self._remove_preview_at_index(row)
 
     def _on_camera_data_changed(self):
         """Handle any camera data change - validate and update preview."""
@@ -712,13 +722,13 @@ class PlatformConfigScreen(QWidget):
         cameras = self.camera_table.get_all_cameras()
 
         # Check AI Central count
-        ai_central_count = sum(1 for cam in cameras if cam['camera_type'] == 'AI Central')
+        ai_central_count = sum(1 for cam in cameras if cam['camera_type'] == 'AI CENTRAL')
         if ai_central_count > MAX_AI_CENTRAL_CAMERAS:
-            errors.append(f"Only {MAX_AI_CENTRAL_CAMERAS} AI Central camera allowed (found {ai_central_count})")
+            errors.append(f"Only {MAX_AI_CENTRAL_CAMERAS} AI CENTRAL camera allowed (found {ai_central_count})")
 
-        # Check 3:1 positions
+        # Check 3:1 positions (both manager and worker)
         for i, cam in enumerate(cameras):
-            if cam['camera_type'] == '3:1':
+            if cam['camera_type'].startswith('3:1'):
                 pos = cam['mounting_position']
                 if pos not in VALID_3_1_POSITIONS and pos != "N/A":
                     errors.append(f"Camera {cam['camera_number']}: 3:1 cameras can only be at Front Center or Rear Center")
@@ -739,11 +749,6 @@ class PlatformConfigScreen(QWidget):
                     errors.append(f"Duplicate position '{pos}' found")
                 else:
                     positions[pos] = i
-
-        # Check 3:1 cameras have role selected
-        for cam in cameras:
-            if cam['camera_type'] == '3:1' and not cam['camera_role']:
-                errors.append(f"Camera {cam['camera_number']}: 3:1 cameras must have a role (Manager/Worker)")
 
         # Highlight duplicate positions
         self.camera_table.highlight_duplicate_positions(list(set(duplicate_rows)))
@@ -860,7 +865,6 @@ class PlatformConfigScreen(QWidget):
                 cam = self.config.cameras[i]
                 cam.camera_id = data['camera_id']
                 cam.camera_type = data['camera_type']
-                cam.camera_role = data['camera_role']
                 cam.camera_model = data['camera_model']
                 cam.mounting_position = data['mounting_position']
                 cam.ip_address = data['ip_address']
