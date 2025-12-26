@@ -293,6 +293,14 @@ class CameraPreviewScreen(QWidget):
         self.config = config
         self._populate_camera_table()
 
+    def verify_cameras(self):
+        """Verify camera connections and update table status.
+
+        Called after screen transition to refresh the camera table
+        and ensure status is up to date.
+        """
+        self._populate_camera_table()
+
     def set_base_path(self, path: str):
         """Set the base path."""
         self.base_path = path
