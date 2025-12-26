@@ -95,6 +95,7 @@ class MainWindow(QMainWindow):
         # Platform config screen signals
         self.platform_config_screen.cancel_requested.connect(self._on_cancel_to_welcome)
         self.platform_config_screen.next_requested.connect(self._on_platform_config_next)
+        self.platform_config_screen.config_changed.connect(self._on_config_changed)
 
         # Camera preview screen signals
         self.camera_preview_screen.cancel_requested.connect(self._on_camera_preview_cancel)
@@ -165,6 +166,16 @@ class MainWindow(QMainWindow):
         """Return to welcome screen."""
         self.screen_stack.setCurrentWidget(self.welcome_screen)
         self.welcome_screen.refresh()
+
+    def _on_config_changed(self, config: PlatformConfiguration):
+        """Handle config changes (camera added/removed) - save immediately.
+
+        This ensures that if the user navigates back to welcome screen and
+        loads the configuration again, the changes are preserved.
+        """
+        self.current_config = config
+        self.data_store.last_platform_config = config
+        self.data_store.save()
 
     def _on_platform_config_next(self, config: PlatformConfiguration):
         """Handle Next from platform configuration screen."""
