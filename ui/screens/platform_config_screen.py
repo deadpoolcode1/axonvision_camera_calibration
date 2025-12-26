@@ -667,8 +667,8 @@ class PlatformConfigScreen(QWidget):
                 col = 0
                 row += 1
 
-        # Start streaming after a short delay
-        QTimer.singleShot(500, self._start_all_previews)
+        # Note: Camera streaming is started in showEvent() when screen is visible
+        # Do NOT start cameras here during construction
 
     def _update_preview_info(self):
         """Update preview widgets with current camera info."""
@@ -692,6 +692,8 @@ class PlatformConfigScreen(QWidget):
         self._stop_all_previews()
         self._update_config_from_ui()
         self._rebuild_preview_grid()
+        # Restart streaming after refresh (when user explicitly clicks refresh)
+        QTimer.singleShot(500, self._start_all_previews)
 
     def _reload_camera_table(self):
         """Reload the camera table from config."""
