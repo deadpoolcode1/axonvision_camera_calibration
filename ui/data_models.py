@@ -33,10 +33,7 @@ MOUNTING_POSITIONS = [
 VALID_3_1_POSITIONS = ["Front Center", "Rear Center"]
 
 # Camera type options
-CAMERA_TYPES = ["AI Central", "1:1", "3:1"]
-
-# Camera role options (only for 3:1 type)
-CAMERA_ROLES = ["Manager", "Worker"]
+CAMERA_TYPES = ["AI CENTRAL", "1:1", "3:1 manager", "3:1 worker"]
 
 # Maximum limits
 MAX_CAMERAS = 6
@@ -53,12 +50,11 @@ PLATFORM_TYPES = ["Type A", "Type B", "Type C", "Custom"]
 class CameraDefinition:
     """Definition of a single camera in the system."""
     camera_number: int
-    camera_type: str = "1:1"  # AI Central, 1:1, or 3:1
+    camera_type: str = "1:1"  # AI CENTRAL, 1:1, 3:1 manager, or 3:1 worker
     camera_model: str = "IMX219"
     mounting_position: str = "N/A"  # Default to N/A - must be set
     ip_address: str = "192.168.1.100"
     camera_id: str = ""  # Will be auto-generated if empty
-    camera_role: str = ""  # Manager or Worker (only for 3:1 type)
 
     def __post_init__(self):
         if not self.camera_id:
