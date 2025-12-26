@@ -272,6 +272,7 @@ class CameraPreviewWidget(QFrame):
         self.timer.timeout.connect(self._update_frame)
         self._is_streaming = False
         self._is_connecting = False  # Track if connection is in progress
+        self._ping_success = False  # Track if camera is reachable via ping
         self._stream_thread: Optional[QThread] = None
         self._stream_worker: Optional[CameraStreamWorker] = None
         self._finishing_threads: list = []  # Keep refs to threads until they finish
@@ -366,8 +367,10 @@ class CameraPreviewWidget(QFrame):
         if success and self._stream_worker:
             self.camera_source = self._stream_worker.get_camera_source()
             self._is_streaming = True
+            self._ping_success = True  # Camera is reachable if connection succeeded
             self.timer.start(100)  # 10 FPS for preview
         else:
+            self._ping_success = False  # Camera is not reachable
             error_display = error_msg[:20] + "..." if len(error_msg) > 20 else error_msg
             self.video_label.setText(f"Failed: {error_display}" if error_msg else "Connection failed")
 
@@ -503,6 +506,37 @@ class CameraPreviewWidget(QFrame):
         h, w = rgb_frame.shape[:2]
         q_image = QImage(rgb_frame.data, w, h, 3*w, QImage.Format_RGB888)
         self.video_label.setPixmap(QPixmap.fromImage(q_image))
+
+    def is_camera_reachable(self) -> bool:
+        """Check if camera is reachable (streaming or ping successful)."""
+        return self._is_streaming or self._ping_success
+
+    def check_ping(self) -> bool:
+        """Perform a ping test to check if camera is reachable.
+
+        Returns True if camera responds to ping, False otherwise.
+        """
+        if not self.ip_address:
+            return False
+
+        try:
+            # Use platform-appropriate ping command
+            if platform.system().lower() == "windows":
+                cmd = ["ping", "-n", "1", "-w", "1000", self.ip_address]
+            else:
+                cmd = ["ping", "-c", "1", "-W", "1", self.ip_address]
+
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=3
+            )
+            self._ping_success = (result.returncode == 0)
+            return self._ping_success
+        except (subprocess.TimeoutExpired, Exception):
+            self._ping_success = False
+            return False
 
 
 class CameraTableWidget(QTableWidget):
@@ -1101,6 +1135,65 @@ class PlatformConfigScreen(QWidget):
         for camera in self.config.cameras:
             self.camera_table.add_camera_row(camera, self.base_path)
 
+    def _check_all_cameras_ping(self) -> list:
+        """Check ping connectivity for all cameras.
+
+        Returns a list of cameras that are not reachable.
+        First checks if camera is already streaming (connected), then falls back to ping test.
+        """
+        unreachable = []
+        cameras = self.camera_table.get_all_cameras()
+
+        for i, camera_data in enumerate(cameras):
+            ip_address = camera_data.get('ip_address', '').strip()
+            camera_id = camera_data.get('camera_id', f'Camera {i+1}')
+
+            # Skip if no IP address configured
+            if not ip_address:
+                unreachable.append({'camera_id': camera_id, 'ip_address': 'No IP configured'})
+                continue
+
+            # Check if preview widget exists and is already connected
+            if i < len(self.preview_widgets):
+                preview = self.preview_widgets[i]
+                # If already streaming, camera is reachable
+                if preview.is_camera_reachable():
+                    continue
+                # Try ping check
+                if preview.check_ping():
+                    continue
+
+            # If no preview widget or ping failed, do a direct ping
+            if not self._ping_ip(ip_address):
+                unreachable.append({'camera_id': camera_id, 'ip_address': ip_address})
+
+        return unreachable
+
+    def _ping_ip(self, ip_address: str) -> bool:
+        """Perform a direct ping test to an IP address.
+
+        Returns True if the IP responds to ping, False otherwise.
+        """
+        if not ip_address:
+            return False
+
+        try:
+            # Use platform-appropriate ping command
+            if platform.system().lower() == "windows":
+                cmd = ["ping", "-n", "1", "-w", "1000", ip_address]
+            else:
+                cmd = ["ping", "-c", "1", "-W", "1", ip_address]
+
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=3
+            )
+            return result.returncode == 0
+        except (subprocess.TimeoutExpired, Exception):
+            return False
+
     def _on_next_clicked(self):
         """Handle Next button click."""
         # Validate platform ID
@@ -1123,6 +1216,18 @@ class PlatformConfigScreen(QWidget):
                 self,
                 "Configuration Error",
                 "Please fix the following issues:\n\n" + "\n".join(f"• {e}" for e in errors)
+            )
+            return
+
+        # Validate camera connectivity (ping check)
+        unreachable_cameras = self._check_all_cameras_ping()
+        if unreachable_cameras:
+            camera_list = "\n".join(f"• {cam['camera_id']} ({cam['ip_address']})" for cam in unreachable_cameras)
+            QMessageBox.warning(
+                self,
+                "Camera Connectivity Error",
+                f"The following cameras are not reachable:\n\n{camera_list}\n\n"
+                "Please ensure all cameras are powered on and connected to the network before proceeding."
             )
             return
 
