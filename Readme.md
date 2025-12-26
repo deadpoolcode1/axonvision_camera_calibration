@@ -657,3 +657,39 @@ cat demo_extrinsics.json
 | Camera prior | Simulated (~10cm, ~2° error) | Measured with tape/inclinometer |
 | INS | Simulated | Real INS data |
 | Images | Synthetic ChArUco rendering | Real camera images |
+
+---
+
+## Release Notes
+
+### v1.0.0
+
+#### New Features
+- Add camera ping validation before progressing from screen 2 to screen 3
+- Implement threaded camera connection to prevent UI freezing
+- Reorganize screen layout: move sensor data to Screen 2, simplify Screen 3
+
+#### Camera Connection & Threading Improvements
+- Fix camera connection during login screen
+- Fix camera preview threading in screen 2
+- Fix UI freeze when adding camera with invalid IP in screen 2
+- Update camera types and optimize camera removal
+- Fix crash when removing camera while thread is still running
+- Fix QThread crash by keeping references to finishing threads
+- Fix QThread crash when removing camera with non-existent IP
+- Fix worker being GC'd while thread still using it
+- Fix UI freeze when removing camera during connection attempt
+
+#### UI Improvements
+- Fix table column width in Screen 3 to auto-resize based on content
+- Make Real-Time Sensor Data widget smaller and more responsive
+- Fix sensor data widget height - data was not visible
+
+#### Bug Fixes
+- Resolve all 13 GitHub issues: camera features, UI improvements, and login screen
+- Fix main UI crash when loading saved data with old camera_role field
+- Add missing verify_cameras method to CameraPreviewScreen
+- Fix stale camera previews when navigating back to Screen 2
+- Fix: Don't auto-create 4 default cameras when starting new calibration
+- Fix stale camera IP persistence when navigating between screens
+- Fix GStreamer warnings
