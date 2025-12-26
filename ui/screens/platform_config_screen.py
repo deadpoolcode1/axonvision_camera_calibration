@@ -645,6 +645,7 @@ class PlatformConfigScreen(QWidget):
 
     cancel_requested = Signal()
     next_requested = Signal(PlatformConfiguration)
+    config_changed = Signal(PlatformConfiguration)  # Emitted when camera is added/removed
 
     def __init__(self, config: PlatformConfiguration = None, parent=None):
         super().__init__(parent)
@@ -869,6 +870,9 @@ class PlatformConfigScreen(QWidget):
         # Add only the new preview widget, don't rebuild all existing ones
         self._add_single_preview(camera)
 
+        # Emit signal so config can be saved immediately
+        self.config_changed.emit(self.config)
+
     def _add_single_preview(self, camera):
         """Add a single camera preview widget without affecting existing previews."""
         preview = CameraPreviewWidget(camera.camera_id, camera.ip_address)
@@ -924,11 +928,18 @@ class PlatformConfigScreen(QWidget):
             )
             return
 
+        # Sync any pending table edits to config before removing
+        # This ensures IP changes made in the table are saved
+        self._update_config_from_ui()
+
         self.config.remove_camera(row)
         self._reload_camera_table()
         self._update_camera_count()
         # Only remove the specific preview, keep other valid connections
         self._remove_preview_at_index(row)
+
+        # Emit signal so config can be saved immediately
+        self.config_changed.emit(self.config)
 
     def _on_camera_data_changed(self):
         """Handle any camera data change - validate and update preview."""
