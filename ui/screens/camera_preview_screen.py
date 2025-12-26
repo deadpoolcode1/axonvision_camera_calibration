@@ -126,20 +126,15 @@ class CameraPreviewScreen(QWidget):
         self.camera_table.setHorizontalHeaderLabels(columns)
 
         header = self.camera_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.Fixed)
-        header.setSectionResizeMode(1, QHeaderView.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.Fixed)
-        header.setSectionResizeMode(3, QHeaderView.Fixed)
-        header.setSectionResizeMode(4, QHeaderView.Stretch)
-        header.setSectionResizeMode(5, QHeaderView.Stretch)
-        header.setSectionResizeMode(6, QHeaderView.Fixed)
-        header.setSectionResizeMode(7, QHeaderView.Fixed)
-
-        self.camera_table.setColumnWidth(0, 40)
-        self.camera_table.setColumnWidth(2, 100)
-        self.camera_table.setColumnWidth(3, 90)
-        self.camera_table.setColumnWidth(6, 120)
-        self.camera_table.setColumnWidth(7, 100)
+        # Use ResizeToContents for auto-width based on text length
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)  # #
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Camera ID
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)  # Type
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)  # Model
+        header.setSectionResizeMode(4, QHeaderView.Stretch)           # Position - stretch to fill
+        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)  # IP Address
+        header.setSectionResizeMode(6, QHeaderView.ResizeToContents)  # Intrinsic Status
+        header.setSectionResizeMode(7, QHeaderView.ResizeToContents)  # Action
 
         self.camera_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.camera_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
