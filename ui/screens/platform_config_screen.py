@@ -11,6 +11,7 @@ Configure platform information and camera setup:
 from pathlib import Path
 import subprocess
 import platform
+import random
 from typing import Optional
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
@@ -55,6 +56,132 @@ try:
     from intrinsic_calibration import NetworkCameraSource
 except ImportError:
     NetworkCameraSource = None
+
+
+class SensorDataWidget(QFrame):
+    """Widget displaying real-time LLA and YPR sensor data."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.timer = QTimer()
+        self.timer.timeout.connect(self._update_data)
+        self._setup_ui()
+
+    def _setup_ui(self):
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {COLORS['white']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 8px;
+                padding: 10px;
+            }}
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        # Header
+        header = QLabel("Real-Time Sensor Data")
+        header.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {COLORS['primary']};")
+        layout.addWidget(header)
+
+        # LLA Section
+        lla_frame = QFrame()
+        lla_frame.setStyleSheet("border: none;")
+        lla_layout = QGridLayout(lla_frame)
+        lla_layout.setSpacing(8)
+
+        lla_label = QLabel("Position (LLA)")
+        lla_label.setStyleSheet(f"font-weight: bold; color: {COLORS['text_dark']};")
+        lla_layout.addWidget(lla_label, 0, 0, 1, 2)
+
+        lla_layout.addWidget(QLabel("Latitude:"), 1, 0)
+        self.lat_value = QLabel("---.------°")
+        self.lat_value.setStyleSheet(f"font-family: monospace; color: {COLORS['primary']};")
+        lla_layout.addWidget(self.lat_value, 1, 1)
+
+        lla_layout.addWidget(QLabel("Longitude:"), 2, 0)
+        self.lon_value = QLabel("---.------°")
+        self.lon_value.setStyleSheet(f"font-family: monospace; color: {COLORS['primary']};")
+        lla_layout.addWidget(self.lon_value, 2, 1)
+
+        lla_layout.addWidget(QLabel("Altitude:"), 3, 0)
+        self.alt_value = QLabel("----.-- m")
+        self.alt_value.setStyleSheet(f"font-family: monospace; color: {COLORS['primary']};")
+        lla_layout.addWidget(self.alt_value, 3, 1)
+
+        layout.addWidget(lla_frame)
+
+        # Separator
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet(f"background-color: {COLORS['border']};")
+        layout.addWidget(sep)
+
+        # YPR Section
+        ypr_frame = QFrame()
+        ypr_frame.setStyleSheet("border: none;")
+        ypr_layout = QGridLayout(ypr_frame)
+        ypr_layout.setSpacing(8)
+
+        ypr_label = QLabel("Orientation (YPR)")
+        ypr_label.setStyleSheet(f"font-weight: bold; color: {COLORS['text_dark']};")
+        ypr_layout.addWidget(ypr_label, 0, 0, 1, 2)
+
+        ypr_layout.addWidget(QLabel("Yaw:"), 1, 0)
+        self.yaw_value = QLabel("---.--°")
+        self.yaw_value.setStyleSheet(f"font-family: monospace; color: {COLORS['primary']};")
+        ypr_layout.addWidget(self.yaw_value, 1, 1)
+
+        ypr_layout.addWidget(QLabel("Pitch:"), 2, 0)
+        self.pitch_value = QLabel("---.--°")
+        self.pitch_value.setStyleSheet(f"font-family: monospace; color: {COLORS['primary']};")
+        ypr_layout.addWidget(self.pitch_value, 2, 1)
+
+        ypr_layout.addWidget(QLabel("Roll:"), 3, 0)
+        self.roll_value = QLabel("---.--°")
+        self.roll_value.setStyleSheet(f"font-family: monospace; color: {COLORS['primary']};")
+        ypr_layout.addWidget(self.roll_value, 3, 1)
+
+        layout.addWidget(ypr_frame)
+
+        # Status
+        self.status_label = QLabel("⚪ Waiting for data...")
+        self.status_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-style: italic;")
+        layout.addWidget(self.status_label)
+
+        layout.addStretch()
+
+    def start_updates(self):
+        """Start updating sensor data."""
+        self.timer.start(100)  # 10 Hz update
+        self.status_label.setText("🟢 Receiving data")
+        self.status_label.setStyleSheet(f"color: {COLORS['success']};")
+
+    def stop_updates(self):
+        """Stop updating sensor data."""
+        self.timer.stop()
+        self.status_label.setText("⚪ Stopped")
+        self.status_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-style: italic;")
+
+    def _update_data(self):
+        """Update sensor values with simulated data (replace with real INS data)."""
+        # Simulated data - in production, this would read from INS
+        lat = 37.7749 + random.uniform(-0.0001, 0.0001)
+        lon = -122.4194 + random.uniform(-0.0001, 0.0001)
+        alt = 10.5 + random.uniform(-0.1, 0.1)
+
+        yaw = random.uniform(0, 360)
+        pitch = random.uniform(-5, 5)
+        roll = random.uniform(-3, 3)
+
+        self.lat_value.setText(f"{lat:011.6f}°")
+        self.lon_value.setText(f"{lon:012.6f}°")
+        self.alt_value.setText(f"{alt:07.2f} m")
+
+        self.yaw_value.setText(f"{yaw:06.2f}°")
+        self.pitch_value.setText(f"{pitch:+06.2f}°")
+        self.roll_value.setText(f"{roll:+06.2f}°")
 
 
 class CameraStreamWorker(QObject):
@@ -650,7 +777,7 @@ class PlatformConfigScreen(QWidget):
 
         content_splitter.addWidget(left_widget)
 
-        # Right side - Camera Preview
+        # Right side - Camera Preview and Sensor Data
         right_widget = QWidget()
         right_layout = QVBoxLayout(right_widget)
         right_layout.setContentsMargins(10, 0, 0, 0)
@@ -680,7 +807,12 @@ class PlatformConfigScreen(QWidget):
         scroll_area.setWidget(self.preview_container)
         preview_layout.addWidget(scroll_area, 1)
 
-        right_layout.addWidget(preview_frame)
+        right_layout.addWidget(preview_frame, 1)
+
+        # Sensor Data Widget
+        self.sensor_widget = SensorDataWidget()
+        right_layout.addWidget(self.sensor_widget)
+
         content_splitter.addWidget(right_widget)
 
         # Set initial sizes
@@ -951,8 +1083,9 @@ class PlatformConfigScreen(QWidget):
             )
             return
 
-        # Stop previews before navigating
+        # Stop previews and sensor updates before navigating
         self._stop_all_previews()
+        self.sensor_widget.stop_updates()
 
         # Emit signal with updated config
         self.next_requested.emit(self.config)
@@ -984,11 +1117,13 @@ class PlatformConfigScreen(QWidget):
         self._reload_camera_table()
 
     def showEvent(self, event):
-        """Start previews when screen is shown."""
+        """Start previews and sensor updates when screen is shown."""
         super().showEvent(event)
         QTimer.singleShot(500, self._start_all_previews)
+        self.sensor_widget.start_updates()
 
     def hideEvent(self, event):
-        """Stop previews when screen is hidden."""
+        """Stop previews and sensor updates when screen is hidden."""
         self._stop_all_previews()
+        self.sensor_widget.stop_updates()
         super().hideEvent(event)
