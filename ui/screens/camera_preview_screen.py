@@ -29,15 +29,19 @@ import cv2
 from ..styles import COLORS
 from ..data_models import PlatformConfiguration, MOUNTING_POSITIONS
 
-# Module-level list to keep references to orphaned threads that couldn't be stopped
-# This prevents QThread from being garbage collected while still running
+# Module-level list to keep references to orphaned threads AND their workers
+# This prevents QThread/QObject from being garbage collected while still running
+# Each entry is a tuple of (thread, worker) to keep both alive
 _orphaned_threads: list = []
 
 
-def _on_orphaned_thread_finished(thread: QThread):
+def _on_orphaned_thread_finished(orphan_tuple):
     """Remove finished orphaned thread from tracking list."""
-    if thread in _orphaned_threads:
-        _orphaned_threads.remove(thread)
+    if orphan_tuple in _orphaned_threads:
+        _orphaned_threads.remove(orphan_tuple)
+    thread, worker = orphan_tuple
+    if worker:
+        worker.deleteLater()
     thread.deleteLater()
 
 
@@ -489,35 +493,40 @@ class CameraPreviewCard(QFrame):
             wait_for_finish: If True, block until thread finishes (for widget deletion).
                            If False, allow thread to finish asynchronously.
         """
-        if self._stream_worker:
-            self._stream_worker.stop()
+        worker = self._stream_worker
+        thread = self._stream_thread
 
-        if self._stream_thread:
-            self._stream_thread.quit()
+        if worker:
+            worker.stop()
+
+        if thread:
+            thread.quit()
 
             if wait_for_finish:
                 # Block until thread finishes - needed before widget deletion
                 # Wait up to 12 seconds (network timeout can be 5s for stop + 5s for start)
-                if not self._stream_thread.wait(12000):
+                if not thread.wait(12000):
                     # Thread didn't stop gracefully, force terminate
-                    self._stream_thread.terminate()
-                    self._stream_thread.wait(2000)
+                    thread.terminate()
+                    thread.wait(2000)
 
                 # Check if thread is STILL running after terminate
                 # If so, move to module-level orphaned list to prevent GC crash
-                # when this widget is deleted
-                if self._stream_thread.isRunning():
-                    thread = self._stream_thread
-                    _orphaned_threads.append(thread)
-                    thread.finished.connect(lambda t=thread: _on_orphaned_thread_finished(t))
+                # IMPORTANT: Also keep worker alive - it's still being used by the thread!
+                if thread.isRunning():
+                    orphan = (thread, worker)
+                    _orphaned_threads.append(orphan)
+                    thread.finished.connect(lambda o=orphan: _on_orphaned_thread_finished(o))
             else:
                 # Non-blocking cleanup - thread will finish on its own
                 # Keep reference until thread finishes to prevent GC crash
-                thread = self._stream_thread
                 self._finishing_threads.append(thread)
                 thread.finished.connect(lambda t=thread: self._on_thread_finished(t))
 
             self._stream_thread = None
+
+        # Always clear the instance worker reference
+        # (orphaned list keeps its own reference if needed)
         self._stream_worker = None
 
     def _on_thread_finished(self, thread: QThread):
