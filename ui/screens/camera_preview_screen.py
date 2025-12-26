@@ -672,7 +672,7 @@ class CameraPreviewScreen(QWidget):
 
     def _setup_config_table(self):
         """Setup the read-only configuration table."""
-        columns = ['#', 'Camera ID', 'Type', 'Role', 'Model', 'Position', 'IP Address', 'Intrinsic']
+        columns = ['#', 'Camera ID', 'Type', 'Model', 'Position', 'IP Address', 'Intrinsic']
         self.config_table.setColumnCount(len(columns))
         self.config_table.setHorizontalHeaderLabels(columns)
 
@@ -681,16 +681,14 @@ class CameraPreviewScreen(QWidget):
         header.setSectionResizeMode(1, QHeaderView.Stretch)
         header.setSectionResizeMode(2, QHeaderView.Fixed)
         header.setSectionResizeMode(3, QHeaderView.Fixed)
-        header.setSectionResizeMode(4, QHeaderView.Fixed)
+        header.setSectionResizeMode(4, QHeaderView.Stretch)
         header.setSectionResizeMode(5, QHeaderView.Stretch)
-        header.setSectionResizeMode(6, QHeaderView.Stretch)
-        header.setSectionResizeMode(7, QHeaderView.Fixed)
+        header.setSectionResizeMode(6, QHeaderView.Fixed)
 
         self.config_table.setColumnWidth(0, 40)
-        self.config_table.setColumnWidth(2, 80)
-        self.config_table.setColumnWidth(3, 70)
-        self.config_table.setColumnWidth(4, 90)
-        self.config_table.setColumnWidth(7, 80)
+        self.config_table.setColumnWidth(2, 110)
+        self.config_table.setColumnWidth(3, 90)
+        self.config_table.setColumnWidth(6, 80)
 
         self.config_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.config_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -716,17 +714,14 @@ class CameraPreviewScreen(QWidget):
             # Type
             self.config_table.setItem(row, 2, QTableWidgetItem(camera.camera_type))
 
-            # Role
-            self.config_table.setItem(row, 3, QTableWidgetItem(camera.camera_role or "-"))
-
             # Model
-            self.config_table.setItem(row, 4, QTableWidgetItem(camera.camera_model))
+            self.config_table.setItem(row, 3, QTableWidgetItem(camera.camera_model))
 
             # Position
-            self.config_table.setItem(row, 5, QTableWidgetItem(camera.mounting_position))
+            self.config_table.setItem(row, 4, QTableWidgetItem(camera.mounting_position))
 
             # IP Address
-            self.config_table.setItem(row, 6, QTableWidgetItem(camera.ip_address))
+            self.config_table.setItem(row, 5, QTableWidgetItem(camera.ip_address))
 
             # Intrinsic status
             has_intrinsic = camera.has_intrinsic_calibration(self.base_path)
@@ -736,7 +731,7 @@ class CameraPreviewScreen(QWidget):
                 status_item.setForeground(Qt.darkGreen)
             else:
                 status_item.setForeground(Qt.red)
-            self.config_table.setItem(row, 7, status_item)
+            self.config_table.setItem(row, 6, status_item)
 
             self.config_table.setRowHeight(row, 35)
 
