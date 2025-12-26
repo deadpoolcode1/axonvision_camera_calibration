@@ -73,96 +73,124 @@ class SensorDataWidget(QFrame):
                 background-color: {COLORS['white']};
                 border: 1px solid {COLORS['border']};
                 border-radius: 8px;
-                padding: 10px;
+                padding: 6px;
             }}
         """)
 
+        # Set size constraints to keep it compact but prevent malformation
+        self.setMaximumHeight(120)
+        self.setMinimumWidth(300)
+        self.setMinimumHeight(100)
+
         layout = QVBoxLayout(self)
-        layout.setSpacing(10)
+        layout.setSpacing(4)
+        layout.setContentsMargins(6, 6, 6, 6)
 
-        # Header
+        # Header row with title and status
+        header_layout = QHBoxLayout()
         header = QLabel("Real-Time Sensor Data")
-        header.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {COLORS['primary']};")
-        layout.addWidget(header)
+        header.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {COLORS['primary']};")
+        header_layout.addWidget(header)
 
-        # LLA Section
+        self.status_label = QLabel("⚪ Waiting...")
+        self.status_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-style: italic; font-size: 11px;")
+        header_layout.addWidget(self.status_label)
+        header_layout.addStretch()
+        layout.addLayout(header_layout)
+
+        # Horizontal layout for LLA and YPR side by side
+        data_layout = QHBoxLayout()
+        data_layout.setSpacing(15)
+
+        # LLA Section (compact)
         lla_frame = QFrame()
         lla_frame.setStyleSheet("border: none;")
         lla_layout = QGridLayout(lla_frame)
-        lla_layout.setSpacing(8)
+        lla_layout.setSpacing(2)
+        lla_layout.setContentsMargins(0, 0, 0, 0)
 
         lla_label = QLabel("Position (LLA)")
-        lla_label.setStyleSheet(f"font-weight: bold; color: {COLORS['text_dark']};")
+        lla_label.setStyleSheet(f"font-weight: bold; color: {COLORS['text_dark']}; font-size: 11px;")
         lla_layout.addWidget(lla_label, 0, 0, 1, 2)
 
-        lla_layout.addWidget(QLabel("Latitude:"), 1, 0)
+        lat_lbl = QLabel("Lat:")
+        lat_lbl.setStyleSheet("font-size: 11px;")
+        lla_layout.addWidget(lat_lbl, 1, 0)
         self.lat_value = QLabel("---.------°")
-        self.lat_value.setStyleSheet(f"font-family: monospace; color: {COLORS['primary']};")
+        self.lat_value.setStyleSheet(f"font-family: monospace; color: {COLORS['primary']}; font-size: 11px;")
         lla_layout.addWidget(self.lat_value, 1, 1)
 
-        lla_layout.addWidget(QLabel("Longitude:"), 2, 0)
+        lon_lbl = QLabel("Lon:")
+        lon_lbl.setStyleSheet("font-size: 11px;")
+        lla_layout.addWidget(lon_lbl, 2, 0)
         self.lon_value = QLabel("---.------°")
-        self.lon_value.setStyleSheet(f"font-family: monospace; color: {COLORS['primary']};")
+        self.lon_value.setStyleSheet(f"font-family: monospace; color: {COLORS['primary']}; font-size: 11px;")
         lla_layout.addWidget(self.lon_value, 2, 1)
 
-        lla_layout.addWidget(QLabel("Altitude:"), 3, 0)
+        alt_lbl = QLabel("Alt:")
+        alt_lbl.setStyleSheet("font-size: 11px;")
+        lla_layout.addWidget(alt_lbl, 3, 0)
         self.alt_value = QLabel("----.-- m")
-        self.alt_value.setStyleSheet(f"font-family: monospace; color: {COLORS['primary']};")
+        self.alt_value.setStyleSheet(f"font-family: monospace; color: {COLORS['primary']}; font-size: 11px;")
         lla_layout.addWidget(self.alt_value, 3, 1)
 
-        layout.addWidget(lla_frame)
+        data_layout.addWidget(lla_frame)
 
-        # Separator
+        # Vertical separator
         sep = QFrame()
-        sep.setFrameShape(QFrame.HLine)
+        sep.setFrameShape(QFrame.VLine)
         sep.setStyleSheet(f"background-color: {COLORS['border']};")
-        layout.addWidget(sep)
+        sep.setFixedWidth(1)
+        data_layout.addWidget(sep)
 
-        # YPR Section
+        # YPR Section (compact)
         ypr_frame = QFrame()
         ypr_frame.setStyleSheet("border: none;")
         ypr_layout = QGridLayout(ypr_frame)
-        ypr_layout.setSpacing(8)
+        ypr_layout.setSpacing(2)
+        ypr_layout.setContentsMargins(0, 0, 0, 0)
 
         ypr_label = QLabel("Orientation (YPR)")
-        ypr_label.setStyleSheet(f"font-weight: bold; color: {COLORS['text_dark']};")
+        ypr_label.setStyleSheet(f"font-weight: bold; color: {COLORS['text_dark']}; font-size: 11px;")
         ypr_layout.addWidget(ypr_label, 0, 0, 1, 2)
 
-        ypr_layout.addWidget(QLabel("Yaw:"), 1, 0)
+        yaw_lbl = QLabel("Yaw:")
+        yaw_lbl.setStyleSheet("font-size: 11px;")
+        ypr_layout.addWidget(yaw_lbl, 1, 0)
         self.yaw_value = QLabel("---.--°")
-        self.yaw_value.setStyleSheet(f"font-family: monospace; color: {COLORS['primary']};")
+        self.yaw_value.setStyleSheet(f"font-family: monospace; color: {COLORS['primary']}; font-size: 11px;")
         ypr_layout.addWidget(self.yaw_value, 1, 1)
 
-        ypr_layout.addWidget(QLabel("Pitch:"), 2, 0)
+        pitch_lbl = QLabel("Pitch:")
+        pitch_lbl.setStyleSheet("font-size: 11px;")
+        ypr_layout.addWidget(pitch_lbl, 2, 0)
         self.pitch_value = QLabel("---.--°")
-        self.pitch_value.setStyleSheet(f"font-family: monospace; color: {COLORS['primary']};")
+        self.pitch_value.setStyleSheet(f"font-family: monospace; color: {COLORS['primary']}; font-size: 11px;")
         ypr_layout.addWidget(self.pitch_value, 2, 1)
 
-        ypr_layout.addWidget(QLabel("Roll:"), 3, 0)
+        roll_lbl = QLabel("Roll:")
+        roll_lbl.setStyleSheet("font-size: 11px;")
+        ypr_layout.addWidget(roll_lbl, 3, 0)
         self.roll_value = QLabel("---.--°")
-        self.roll_value.setStyleSheet(f"font-family: monospace; color: {COLORS['primary']};")
+        self.roll_value.setStyleSheet(f"font-family: monospace; color: {COLORS['primary']}; font-size: 11px;")
         ypr_layout.addWidget(self.roll_value, 3, 1)
 
-        layout.addWidget(ypr_frame)
+        data_layout.addWidget(ypr_frame)
+        data_layout.addStretch()
 
-        # Status
-        self.status_label = QLabel("⚪ Waiting for data...")
-        self.status_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-style: italic;")
-        layout.addWidget(self.status_label)
-
-        layout.addStretch()
+        layout.addLayout(data_layout)
 
     def start_updates(self):
         """Start updating sensor data."""
         self.timer.start(100)  # 10 Hz update
-        self.status_label.setText("🟢 Receiving data")
-        self.status_label.setStyleSheet(f"color: {COLORS['success']};")
+        self.status_label.setText("🟢 Receiving")
+        self.status_label.setStyleSheet(f"color: {COLORS['success']}; font-size: 11px;")
 
     def stop_updates(self):
         """Stop updating sensor data."""
         self.timer.stop()
         self.status_label.setText("⚪ Stopped")
-        self.status_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-style: italic;")
+        self.status_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-style: italic; font-size: 11px;")
 
     def _update_data(self):
         """Update sensor values with simulated data (replace with real INS data)."""
