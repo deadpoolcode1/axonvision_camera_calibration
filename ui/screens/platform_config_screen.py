@@ -102,6 +102,7 @@ class CameraPreviewWidget(QFrame):
         self._is_connecting = False  # Track if connection is in progress
         self._stream_thread: Optional[QThread] = None
         self._stream_worker: Optional[CameraStreamWorker] = None
+        self._finishing_threads: list = []  # Keep refs to threads until they finish
         # Debounce timer to avoid restarting on every keystroke
         self._restart_debounce = QTimer()
         self._restart_debounce.setSingleShot(True)
@@ -228,12 +229,19 @@ class CameraPreviewWidget(QFrame):
                     self._stream_thread.wait(1000)
             else:
                 # Non-blocking cleanup - thread will finish on its own
-                # Schedule thread for deletion once it's done
+                # Keep reference until thread finishes to prevent GC crash
                 thread = self._stream_thread
-                thread.finished.connect(thread.deleteLater)
+                self._finishing_threads.append(thread)
+                thread.finished.connect(lambda t=thread: self._on_thread_finished(t))
 
             self._stream_thread = None
         self._stream_worker = None
+
+    def _on_thread_finished(self, thread: QThread):
+        """Remove finished thread from tracking list."""
+        if thread in self._finishing_threads:
+            self._finishing_threads.remove(thread)
+        thread.deleteLater()
 
     def stop_streaming(self, wait_for_finish: bool = False):
         """Stop camera streaming.
