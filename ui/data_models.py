@@ -75,7 +75,11 @@ class CameraDefinition:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'CameraDefinition':
-        return cls(**data)
+        # Filter to only include valid fields for CameraDefinition
+        valid_fields = {'camera_number', 'camera_type', 'camera_model',
+                        'mounting_position', 'ip_address', 'camera_id'}
+        filtered_data = {k: v for k, v in data.items() if k in valid_fields}
+        return cls(**filtered_data)
 
 
 @dataclass
