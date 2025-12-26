@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QHeaderView, QAbstractItemView, QSizePolicy, QMessageBox,
     QScrollArea, QGridLayout, QSplitter
 )
-from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtCore import Qt, Signal, QTimer, QThread, QObject
 from PySide6.QtGui import QPixmap, QImage
 
 import numpy as np
@@ -40,6 +40,53 @@ except ImportError:
     NetworkCameraSource = None
 
 
+class CameraStreamWorker(QObject):
+    """Worker for connecting a single camera stream in background thread."""
+
+    connection_ready = Signal(bool, str)  # success, error_message
+
+    def __init__(self, ip_address: str, parent=None):
+        super().__init__(parent)
+        self.ip_address = ip_address
+        self.camera_source = None
+        self._is_running = True
+
+    def stop(self):
+        """Stop the worker."""
+        self._is_running = False
+
+    def connect_camera(self):
+        """Connect to camera in background thread."""
+        if not self.ip_address or not self._is_running:
+            self.connection_ready.emit(False, "No IP address")
+            return
+
+        try:
+            if NetworkCameraSource is None:
+                self.connection_ready.emit(False, "NetworkCameraSource not available")
+                return
+
+            self.camera_source = NetworkCameraSource(
+                ip=self.ip_address,
+                api_port=5000,
+                multicast_host="239.255.0.1",
+                stream_port=5010,
+                timeout=5.0
+            )
+
+            if self.camera_source.connect():
+                self.connection_ready.emit(True, "")
+            else:
+                error_msg = getattr(self.camera_source, 'last_error', None) or "Connection failed"
+                self.connection_ready.emit(False, error_msg)
+        except Exception as e:
+            self.connection_ready.emit(False, str(e))
+
+    def get_camera_source(self):
+        """Get the connected camera source."""
+        return self.camera_source
+
+
 class CameraPreviewWidget(QFrame):
     """Widget showing a single camera preview."""
 
@@ -51,6 +98,9 @@ class CameraPreviewWidget(QFrame):
         self.timer = QTimer()
         self.timer.timeout.connect(self._update_frame)
         self._is_streaming = False
+        self._is_connecting = False  # Track if connection is in progress
+        self._stream_thread: Optional[QThread] = None
+        self._stream_worker: Optional[CameraStreamWorker] = None
         self._setup_ui()
 
     def _setup_ui(self):
@@ -88,42 +138,72 @@ class CameraPreviewWidget(QFrame):
 
     def update_camera_info(self, camera_id: str, ip_address: str):
         """Update camera information and restart stream if needed."""
+        old_ip = self.ip_address
         self.camera_id = camera_id
         self.ip_address = ip_address
         self.id_label.setText(camera_id or "Camera")
-        if self._is_streaming:
+        # Only restart if IP changed and was streaming
+        if old_ip != ip_address and self._is_streaming:
             self.stop_streaming()
             self.start_streaming()
 
     def start_streaming(self):
-        """Start camera streaming."""
-        if self._is_streaming or NetworkCameraSource is None:
+        """Start camera streaming in a background thread."""
+        if self._is_streaming or self._is_connecting or NetworkCameraSource is None:
             return
         if not self.ip_address:
             self.video_label.setText("No IP")
             return
 
+        self._is_connecting = True
         self.video_label.setText("Connecting...")
-        try:
-            self.camera_source = NetworkCameraSource(
-                ip=self.ip_address,
-                api_port=5000,
-                multicast_host="239.255.0.1",
-                stream_port=5010,
-                timeout=5.0
-            )
-            if self.camera_source.connect():
-                self._is_streaming = True
-                self.timer.start(100)  # 10 FPS for preview
-            else:
-                self.video_label.setText("Connection failed")
-        except Exception as e:
-            self.video_label.setText(f"Error")
+
+        # Clean up any previous thread
+        self._cleanup_stream_thread()
+
+        # Create worker and thread for non-blocking connection
+        self._stream_thread = QThread()
+        self._stream_worker = CameraStreamWorker(self.ip_address)
+        self._stream_worker.moveToThread(self._stream_thread)
+
+        # Connect signals
+        self._stream_thread.started.connect(self._stream_worker.connect_camera)
+        self._stream_worker.connection_ready.connect(self._on_stream_connected)
+
+        # Start thread - connection happens in background
+        self._stream_thread.start()
+
+    def _on_stream_connected(self, success: bool, error_msg: str):
+        """Handle camera connection result from worker thread."""
+        self._is_connecting = False
+
+        if success and self._stream_worker:
+            self.camera_source = self._stream_worker.get_camera_source()
+            self._is_streaming = True
+            self.timer.start(100)  # 10 FPS for preview
+        else:
+            error_display = error_msg[:20] + "..." if len(error_msg) > 20 else error_msg
+            self.video_label.setText(f"Failed: {error_display}" if error_msg else "Connection failed")
+
+        # Clean up thread after connection attempt
+        self._cleanup_stream_thread()
+
+    def _cleanup_stream_thread(self):
+        """Clean up the stream worker thread."""
+        if self._stream_worker:
+            self._stream_worker.stop()
+            self._stream_worker = None
+        if self._stream_thread:
+            self._stream_thread.quit()
+            self._stream_thread.wait(1000)  # Wait up to 1 second
+            self._stream_thread = None
 
     def stop_streaming(self):
         """Stop camera streaming."""
         self.timer.stop()
         self._is_streaming = False
+        self._is_connecting = False
+        self._cleanup_stream_thread()
         if self.camera_source:
             self.camera_source.release()
             self.camera_source = None
@@ -555,7 +635,23 @@ class PlatformConfigScreen(QWidget):
         camera = self.config.add_camera()
         self.camera_table.add_camera_row(camera, self.base_path)
         self._update_camera_count()
-        self._rebuild_preview_grid()
+        # Add only the new preview widget, don't rebuild all existing ones
+        self._add_single_preview(camera)
+
+    def _add_single_preview(self, camera):
+        """Add a single camera preview widget without affecting existing previews."""
+        preview = CameraPreviewWidget(camera.camera_id, camera.ip_address)
+        self.preview_widgets.append(preview)
+
+        # Calculate grid position (2 columns)
+        index = len(self.preview_widgets) - 1
+        row = index // 2
+        col = index % 2
+        self.preview_grid.addWidget(preview, row, col)
+
+        # Start streaming for this preview if screen is visible
+        if self.isVisible():
+            preview.start_streaming()
 
     def _on_camera_removed(self, row: int):
         """Remove a camera from the configuration."""
