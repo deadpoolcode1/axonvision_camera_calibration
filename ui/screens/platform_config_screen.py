@@ -201,8 +201,13 @@ class CameraPreviewWidget(QFrame):
         # Clean up thread after connection attempt
         self._cleanup_stream_thread()
 
-    def _cleanup_stream_thread(self):
-        """Clean up the stream worker thread."""
+    def _cleanup_stream_thread(self, wait_for_finish: bool = False):
+        """Clean up the stream worker thread.
+
+        Args:
+            wait_for_finish: If True, block until thread finishes (for widget deletion).
+                           If False, allow thread to finish asynchronously.
+        """
         if self._stream_worker:
             # Disconnect signals to prevent stale callbacks from old connections
             try:
@@ -210,20 +215,39 @@ class CameraPreviewWidget(QFrame):
             except (RuntimeError, TypeError):
                 pass  # Signal might not be connected or already disconnected
             self._stream_worker.stop()
-            self._stream_worker = None
+
         if self._stream_thread:
             self._stream_thread.quit()
-            self._stream_thread.wait(100)  # Brief wait - don't block UI long
-            self._stream_thread = None
 
-    def stop_streaming(self):
-        """Stop camera streaming."""
+            if wait_for_finish:
+                # Block until thread finishes - needed before widget deletion
+                # Wait up to 6 seconds (camera timeout is 5 seconds)
+                if not self._stream_thread.wait(6000):
+                    # Thread didn't stop gracefully, force terminate
+                    self._stream_thread.terminate()
+                    self._stream_thread.wait(1000)
+            else:
+                # Non-blocking cleanup - thread will finish on its own
+                # Schedule thread for deletion once it's done
+                thread = self._stream_thread
+                thread.finished.connect(thread.deleteLater)
+
+            self._stream_thread = None
+        self._stream_worker = None
+
+    def stop_streaming(self, wait_for_finish: bool = False):
+        """Stop camera streaming.
+
+        Args:
+            wait_for_finish: If True, block until background thread finishes.
+                           Use True when widget is about to be deleted.
+        """
         self.timer.stop()
         self._restart_debounce.stop()  # Cancel any pending restart
         self._pending_ip = None
         self._is_streaming = False
         self._is_connecting = False
-        self._cleanup_stream_thread()
+        self._cleanup_stream_thread(wait_for_finish=wait_for_finish)
         if self.camera_source:
             self.camera_source.release()
             self.camera_source = None
@@ -660,7 +684,8 @@ class PlatformConfigScreen(QWidget):
 
         # Stop and remove only the specific preview widget
         preview_to_remove = self.preview_widgets[index]
-        preview_to_remove.stop_streaming()
+        # Wait for thread to finish before deleting widget to avoid crash
+        preview_to_remove.stop_streaming(wait_for_finish=True)
         self.preview_grid.removeWidget(preview_to_remove)
         preview_to_remove.deleteLater()
         self.preview_widgets.pop(index)
@@ -765,8 +790,9 @@ class PlatformConfigScreen(QWidget):
     def _rebuild_preview_grid(self):
         """Rebuild the camera preview grid."""
         # Stop and clear existing previews
+        # Wait for threads to finish before deleting widgets to avoid crash
         for widget in self.preview_widgets:
-            widget.stop_streaming()
+            widget.stop_streaming(wait_for_finish=True)
             widget.deleteLater()
         self.preview_widgets.clear()
 
