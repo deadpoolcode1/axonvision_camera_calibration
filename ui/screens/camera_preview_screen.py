@@ -469,21 +469,45 @@ class CameraPreviewCard(QFrame):
         # Clean up thread after connection attempt
         self._cleanup_stream_thread()
 
-    def _cleanup_stream_thread(self):
-        """Clean up the stream worker thread."""
+    def _cleanup_stream_thread(self, wait_for_finish: bool = False):
+        """Clean up the stream worker thread.
+
+        Args:
+            wait_for_finish: If True, block until thread finishes (for widget deletion).
+                           If False, allow thread to finish asynchronously.
+        """
         if self._stream_worker:
             self._stream_worker.stop()
-            self._stream_worker = None
+
         if self._stream_thread:
             self._stream_thread.quit()
-            self._stream_thread.wait(1000)  # Wait up to 1 second
-            self._stream_thread = None
 
-    def stop_streaming(self):
-        """Stop camera streaming."""
+            if wait_for_finish:
+                # Block until thread finishes - needed before widget deletion
+                # Wait up to 6 seconds (camera timeout is 5 seconds)
+                if not self._stream_thread.wait(6000):
+                    # Thread didn't stop gracefully, force terminate
+                    self._stream_thread.terminate()
+                    self._stream_thread.wait(1000)
+            else:
+                # Non-blocking cleanup - thread will finish on its own
+                # Schedule thread for deletion once it's done
+                thread = self._stream_thread
+                thread.finished.connect(thread.deleteLater)
+
+            self._stream_thread = None
+        self._stream_worker = None
+
+    def stop_streaming(self, wait_for_finish: bool = False):
+        """Stop camera streaming.
+
+        Args:
+            wait_for_finish: If True, block until background thread finishes.
+                           Use True when widget is about to be deleted.
+        """
         self.timer.stop()
         self._is_streaming = False
-        self._cleanup_stream_thread()
+        self._cleanup_stream_thread(wait_for_finish=wait_for_finish)
         if self.camera_source:
             self.camera_source.release()
             self.camera_source = None
@@ -748,8 +772,9 @@ class CameraPreviewScreen(QWidget):
     def _rebuild_camera_grid(self):
         """Rebuild the camera preview grid from configuration."""
         # Clear existing cards
+        # Wait for threads to finish before deleting to avoid crash
         for card in self.camera_cards:
-            card.stop_streaming()
+            card.stop_streaming(wait_for_finish=True)
             card.deleteLater()
         self.camera_cards.clear()
 
@@ -873,11 +898,16 @@ class CameraPreviewScreen(QWidget):
         """Clean up the ping worker thread."""
         if self._ping_worker:
             self._ping_worker.stop()
-            self._ping_worker = None
+
         if self._ping_thread:
             self._ping_thread.quit()
-            self._ping_thread.wait(1000)  # Wait up to 1 second
+            # Wait up to 3 seconds for ping tests to complete
+            if not self._ping_thread.wait(3000):
+                # Thread didn't stop gracefully, force terminate
+                self._ping_thread.terminate()
+                self._ping_thread.wait(1000)
             self._ping_thread = None
+        self._ping_worker = None
 
     def _ping_device(self, ip_address: str) -> bool:
         """Ping a device to check if it's reachable."""
