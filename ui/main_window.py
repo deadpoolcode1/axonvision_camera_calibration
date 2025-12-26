@@ -16,6 +16,7 @@ from .styles import MAIN_STYLESHEET
 from .data_models import (
     CalibrationDataStore, CalibrationSession, PlatformConfiguration
 )
+from .screens.login_screen import LoginScreen
 from .screens.welcome_screen import WelcomeScreen
 from .screens.platform_config_screen import PlatformConfigScreen
 from .screens.camera_preview_screen import CameraPreviewScreen
@@ -40,6 +41,7 @@ class MainWindow(QMainWindow):
         # Current session state
         self.current_session = None
         self.current_config = None
+        self.current_user = None
 
         self._setup_ui()
         self._connect_signals()
@@ -47,8 +49,8 @@ class MainWindow(QMainWindow):
     def _setup_ui(self):
         """Setup the main window UI."""
         self.setWindowTitle("AxonVision Camera Calibration Tool")
-        self.setMinimumSize(900, 700)
-        self.resize(1024, 768)
+        self.setMinimumSize(1100, 800)
+        self.resize(1280, 900)
 
         # Apply stylesheet
         self.setStyleSheet(MAIN_STYLESHEET)
@@ -64,6 +66,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.screen_stack)
 
         # Create screens
+        self.login_screen = LoginScreen()
         self.welcome_screen = WelcomeScreen(self.data_store)
         self.platform_config_screen = PlatformConfigScreen()
         self.platform_config_screen.set_base_path(self.base_path)
@@ -71,15 +74,19 @@ class MainWindow(QMainWindow):
         self.camera_preview_screen.set_base_path(self.base_path)
 
         # Add screens to stack
-        self.screen_stack.addWidget(self.welcome_screen)  # Index 0
-        self.screen_stack.addWidget(self.platform_config_screen)  # Index 1
-        self.screen_stack.addWidget(self.camera_preview_screen)  # Index 2
+        self.screen_stack.addWidget(self.login_screen)  # Index 0
+        self.screen_stack.addWidget(self.welcome_screen)  # Index 1
+        self.screen_stack.addWidget(self.platform_config_screen)  # Index 2
+        self.screen_stack.addWidget(self.camera_preview_screen)  # Index 3
 
-        # Start on welcome screen
+        # Start on login screen
         self.screen_stack.setCurrentIndex(0)
 
     def _connect_signals(self):
         """Connect screen signals to handlers."""
+        # Login screen signals
+        self.login_screen.login_successful.connect(self._on_login_successful)
+
         # Welcome screen signals
         self.welcome_screen.start_new_calibration.connect(self._on_start_new)
         self.welcome_screen.load_existing_calibration.connect(self._on_load_existing)
@@ -92,6 +99,12 @@ class MainWindow(QMainWindow):
         # Camera preview screen signals
         self.camera_preview_screen.cancel_requested.connect(self._on_camera_preview_cancel)
         self.camera_preview_screen.next_requested.connect(self._on_camera_preview_next)
+
+    def _on_login_successful(self, username: str):
+        """Handle successful login."""
+        self.current_user = username
+        self.setWindowTitle(f"AxonVision Camera Calibration Tool - {username}")
+        self.screen_stack.setCurrentWidget(self.welcome_screen)
 
     def _on_start_new(self):
         """Handle Start New Calibration from welcome screen."""
