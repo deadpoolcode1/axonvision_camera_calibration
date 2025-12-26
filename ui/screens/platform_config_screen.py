@@ -77,10 +77,10 @@ class SensorDataWidget(QFrame):
             }}
         """)
 
-        # Set size constraints to keep it compact but prevent malformation
-        self.setMaximumHeight(120)
+        # Set size constraints to keep it compact but ensure data is visible
         self.setMinimumWidth(300)
-        self.setMinimumHeight(100)
+        self.setMinimumHeight(140)
+        self.setMaximumHeight(160)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(4)
