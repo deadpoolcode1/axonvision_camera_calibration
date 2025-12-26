@@ -29,6 +29,18 @@ import cv2
 from ..styles import COLORS
 from ..data_models import PlatformConfiguration, MOUNTING_POSITIONS
 
+# Module-level list to keep references to orphaned threads that couldn't be stopped
+# This prevents QThread from being garbage collected while still running
+_orphaned_threads: list = []
+
+
+def _on_orphaned_thread_finished(thread: QThread):
+    """Remove finished orphaned thread from tracking list."""
+    if thread in _orphaned_threads:
+        _orphaned_threads.remove(thread)
+    thread.deleteLater()
+
+
 # Import camera streaming from intrinsic_calibration module
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -485,11 +497,19 @@ class CameraPreviewCard(QFrame):
 
             if wait_for_finish:
                 # Block until thread finishes - needed before widget deletion
-                # Wait up to 6 seconds (camera timeout is 5 seconds)
-                if not self._stream_thread.wait(6000):
+                # Wait up to 12 seconds (network timeout can be 5s for stop + 5s for start)
+                if not self._stream_thread.wait(12000):
                     # Thread didn't stop gracefully, force terminate
                     self._stream_thread.terminate()
-                    self._stream_thread.wait(1000)
+                    self._stream_thread.wait(2000)
+
+                # Check if thread is STILL running after terminate
+                # If so, move to module-level orphaned list to prevent GC crash
+                # when this widget is deleted
+                if self._stream_thread.isRunning():
+                    thread = self._stream_thread
+                    _orphaned_threads.append(thread)
+                    thread.finished.connect(lambda t=thread: _on_orphaned_thread_finished(t))
             else:
                 # Non-blocking cleanup - thread will finish on its own
                 # Keep reference until thread finishes to prevent GC crash
