@@ -94,6 +94,7 @@ class CameraPreviewWidget(QFrame):
         super().__init__(parent)
         self.camera_id = camera_id
         self.ip_address = ip_address
+        self._pending_ip = None  # Pending IP for debounced restart
         self.camera_source: Optional['NetworkCameraSource'] = None
         self.timer = QTimer()
         self.timer.timeout.connect(self._update_frame)
@@ -101,6 +102,10 @@ class CameraPreviewWidget(QFrame):
         self._is_connecting = False  # Track if connection is in progress
         self._stream_thread: Optional[QThread] = None
         self._stream_worker: Optional[CameraStreamWorker] = None
+        # Debounce timer to avoid restarting on every keystroke
+        self._restart_debounce = QTimer()
+        self._restart_debounce.setSingleShot(True)
+        self._restart_debounce.timeout.connect(self._debounced_restart)
         self._setup_ui()
 
     def _setup_ui(self):
@@ -142,10 +147,18 @@ class CameraPreviewWidget(QFrame):
         self.camera_id = camera_id
         self.ip_address = ip_address
         self.id_label.setText(camera_id or "Camera")
-        # Only restart if IP changed and was streaming
-        if old_ip != ip_address and self._is_streaming:
+        # Restart if IP changed and was streaming OR connecting
+        # Use debounce to avoid restarting on every keystroke
+        if old_ip != ip_address and (self._is_streaming or self._is_connecting):
+            self._pending_ip = ip_address
+            self._restart_debounce.start(500)  # 500ms debounce
+
+    def _debounced_restart(self):
+        """Restart streaming after debounce delay."""
+        if self._pending_ip and self._pending_ip == self.ip_address:
             self.stop_streaming()
             self.start_streaming()
+        self._pending_ip = None
 
     def start_streaming(self):
         """Start camera streaming in a background thread."""
@@ -191,16 +204,23 @@ class CameraPreviewWidget(QFrame):
     def _cleanup_stream_thread(self):
         """Clean up the stream worker thread."""
         if self._stream_worker:
+            # Disconnect signals to prevent stale callbacks from old connections
+            try:
+                self._stream_worker.connection_ready.disconnect(self._on_stream_connected)
+            except (RuntimeError, TypeError):
+                pass  # Signal might not be connected or already disconnected
             self._stream_worker.stop()
             self._stream_worker = None
         if self._stream_thread:
             self._stream_thread.quit()
-            self._stream_thread.wait(1000)  # Wait up to 1 second
+            self._stream_thread.wait(100)  # Brief wait - don't block UI long
             self._stream_thread = None
 
     def stop_streaming(self):
         """Stop camera streaming."""
         self.timer.stop()
+        self._restart_debounce.stop()  # Cancel any pending restart
+        self._pending_ip = None
         self._is_streaming = False
         self._is_connecting = False
         self._cleanup_stream_thread()
