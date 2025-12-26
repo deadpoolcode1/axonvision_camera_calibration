@@ -1119,6 +1119,9 @@ class PlatformConfigScreen(QWidget):
     def showEvent(self, event):
         """Start previews and sensor updates when screen is shown."""
         super().showEvent(event)
+        # Ensure preview count matches camera count before starting streams
+        if len(self.preview_widgets) != len(self.config.cameras):
+            self._rebuild_preview_grid()
         QTimer.singleShot(500, self._start_all_previews)
         self.sensor_widget.start_updates()
 
