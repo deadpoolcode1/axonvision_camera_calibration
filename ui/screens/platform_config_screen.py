@@ -848,10 +848,7 @@ class PlatformConfigScreen(QWidget):
         for camera in self.config.cameras:
             self.camera_table.add_camera_row(camera, self.base_path)
 
-        # Add default cameras if none exist
-        if not self.config.cameras:
-            for _ in range(4):
-                self._on_add_camera()
+        # No default cameras - user adds cameras as needed via "+ Add Camera" button
 
         self._update_camera_count()
         self._rebuild_preview_grid()
@@ -955,6 +952,13 @@ class PlatformConfigScreen(QWidget):
         errors = []
         duplicate_rows = []
         cameras = self.camera_table.get_all_cameras()
+
+        # Check that at least one camera is configured
+        if not cameras:
+            errors.append("At least one camera must be configured")
+            self.validation_label.setText("⚠ At least one camera must be configured")
+            self.validation_label.show()
+            return False, errors
 
         # Check AI Central count
         ai_central_count = sum(1 for cam in cameras if cam['camera_type'] == 'AI CENTRAL')
