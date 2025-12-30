@@ -1,0 +1,37 @@
+[flake8]
+# Flake8 configuration for AxonVision Camera Calibration
+
+max-line-length = 100
+max-complexity = 10
+
+# Ignore specific error codes
+ignore =
+    # E501: line too long (handled by black)
+    E501,
+    # W503: line break before binary operator (conflicts with black)
+    W503,
+    # E203: whitespace before ':' (conflicts with black)
+    E203,
+
+# Exclude directories
+exclude =
+    .git,
+    __pycache__,
+    .venv,
+    venv,
+    build,
+    dist,
+    *.egg-info,
+    .eggs,
+    camera_intrinsic,
+    logs,
+
+# Per-file ignores
+per-file-ignores =
+    # Allow unused imports in __init__.py files
+    __init__.py: F401
+    # Allow assert statements in tests
+    test_*.py: S101
+
+# Enable extensions
+extend-select = B,C4

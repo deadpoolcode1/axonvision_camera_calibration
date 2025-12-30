@@ -1,0 +1,90 @@
+# AxonVision Camera Calibration - Default Configuration
+# Environment-specific overrides can be placed in development.yaml or production.yaml
+
+# Application settings
+application:
+  name: "AxonVision Camera Calibration Tool"
+  version: "0.9.0"
+  organization: "AxonVision"
+
+# Camera configuration limits
+camera:
+  max_cameras: 6
+  max_ai_central_cameras: 1
+  default_ip_base: "192.168.1"
+  default_ip_start: 100
+
+# Network camera settings
+network:
+  api_port: 5000
+  multicast_host: "239.255.0.1"
+  stream_port: 5010
+  connection_timeout: 5.0
+  ping_timeout: 3
+
+# Camera types
+camera_types:
+  - "(manager)"
+  - "(worker)"
+
+# Camera models
+camera_models:
+  - "IMX219"
+  - "IMX477"
+  - "IMX708"
+  - "OV5647"
+  - "Custom"
+
+# Platform types
+platform_types:
+  - "Type A"
+  - "Type B"
+  - "Type C"
+  - "Custom"
+
+# Mounting positions
+mounting_positions:
+  - "N/A"
+  - "Front Center"
+  - "Front Left"
+  - "Front Right"
+  - "Rear Center"
+  - "Rear Left"
+  - "Rear Right"
+  - "Left Up"
+  - "Left Center"
+  - "Left Down"
+  - "Right Up"
+  - "Right Center"
+  - "Right Down"
+
+# Valid positions for 3:1 cameras
+valid_3_1_positions:
+  - "Front Center"
+  - "Rear Center"
+
+# Logging configuration
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d] - [request_id=%(request_id)s] - %(message)s"
+  date_format: "%Y-%m-%d %H:%M:%S"
+  file:
+    enabled: true
+    path: "logs"
+    filename: "axonvision.log"
+    max_size_mb: 10
+    backup_count: 5
+
+# UI settings
+ui:
+  min_window_width: 1100
+  min_window_height: 800
+  default_window_width: 1280
+  default_window_height: 900
+  preview_update_fps: 10
+  sensor_update_fps: 10
+
+# Storage settings
+storage:
+  sessions_file: "calibration_sessions.json"
+  intrinsic_dir: "camera_intrinsic"

@@ -5,20 +5,23 @@
 # Computer vision (includes ArUco/ChArUco detection)
 opencv-contrib-python==4.8.1.78
 
-# Numerical computing (numpy 2.0 has breaking changes)
-numpy>=1.21,<2
+# Numerical computing (pinned for reproducibility)
+numpy==1.24.3
 
 # Scientific computing (optimization, spatial transforms)
-scipy>=1.7.0
+scipy==1.11.4
 
 # HTTP client for network camera API
-requests>=2.25.0
+requests==2.31.0
 
 # PDF report generation (optional - for --generate-pdf)
-reportlab>=4.0.0
+reportlab==4.0.9
 
 # Serial communication for INS hardware (VectorNav)
-pyserial>=3.5
+pyserial==3.5
 
 # Qt GUI framework (official Qt for Python)
-PySide6>=6.5.0
+PySide6==6.6.1
+
+# YAML configuration support
+PyYAML==6.0.1

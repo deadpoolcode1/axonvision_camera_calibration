@@ -5,11 +5,14 @@ Defines data structures for calibration sessions, cameras, and platforms.
 """
 
 import json
+import logging
 import os
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any
+
+logger = logging.getLogger(__name__)
 
 
 # Mounting position options
@@ -32,8 +35,10 @@ MOUNTING_POSITIONS = [
 # 3:1 cameras can only be in these positions
 VALID_3_1_POSITIONS = ["Front Center", "Rear Center"]
 
-# Camera type options
-CAMERA_TYPES = ["AI CENTRAL", "1:1", "3:1 manager", "3:1 worker"]
+# Camera type options - using lowercase with parentheses format
+# 1:1 cameras are always workers, AI CENTRAL cameras are always managers
+# 3:1 cameras can be either (manager) or (worker)
+CAMERA_TYPES = ["AI CENTRAL", "1:1", "3:1 (manager)", "3:1 (worker)"]
 
 # Maximum limits
 MAX_CAMERAS = 6
@@ -194,7 +199,7 @@ class CalibrationDataStore:
                     data['last_platform_config']
                 )
         except (json.JSONDecodeError, KeyError) as e:
-            print(f"Warning: Could not load calibration data: {e}")
+            logger.warning(f"Could not load calibration data: {e}")
 
     def save(self) -> None:
         """Save data to storage file."""

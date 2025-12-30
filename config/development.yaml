@@ -1,0 +1,9 @@
+# AxonVision Camera Calibration - Development Configuration
+# Overrides default.yaml for development environment
+
+logging:
+  level: "DEBUG"
+  file:
+    enabled: true
+    path: "logs"
+    filename: "axonvision_dev.log"

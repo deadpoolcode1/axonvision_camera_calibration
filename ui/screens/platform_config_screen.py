@@ -599,7 +599,7 @@ class CameraTableWidget(QTableWidget):
         type_combo = QComboBox()
         type_combo.addItems(CAMERA_TYPES)
         type_combo.setCurrentText(camera.camera_type)
-        type_combo.setToolTip("Select camera type: AI CENTRAL (1 max), 1:1, 3:1 manager, or 3:1 worker")
+        type_combo.setToolTip("Select camera type: AI CENTRAL (1 max), 1:1, 3:1 (manager), or 3:1 (worker)")
         type_combo.currentTextChanged.connect(lambda text, r=row: self._on_type_changed(r, text))
         self.setCellWidget(row, 2, type_combo)
 

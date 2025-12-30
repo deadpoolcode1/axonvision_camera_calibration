@@ -1,0 +1,57 @@
+# AxonVision Camera Calibration - Project Configuration
+
+[project]
+name = "axonvision-camera-calibration"
+version = "0.9.0"
+description = "Multi-camera intrinsic and extrinsic calibration tool with INS integration"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "AxonVision", email = "support@axonvision.com"}
+]
+keywords = ["camera", "calibration", "opencv", "computer-vision", "ins"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+[project.scripts]
+axonvision-calibration = "main_ui:main"
+
+[tool.black]
+line-length = 100
+target-version = ['py38', 'py39', 'py310', 'py311', 'py312']
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+  | \.venv
+  | venv
+  | build
+  | dist
+  | __pycache__
+  | camera_intrinsic
+  | logs
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 100
+known_first_party = ["ui", "core", "config"]
+skip = [".git", ".venv", "venv", "build", "dist", "__pycache__"]
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv", "venv"]
+skips = ["B101"]  # Allow assert statements
+
+[tool.bandit.assert_used]
+skips = ["*_test.py", "test_*.py"]
