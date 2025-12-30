@@ -7,6 +7,8 @@ Main entry point for the calibration tool with options to:
 - View recent calibrations
 """
 
+import logging
+
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QScrollArea, QSizePolicy
@@ -14,8 +16,11 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap, QPainter, QColor, QFont
 
+from .. import __version__
 from ..styles import COLORS, get_status_style
 from ..data_models import CalibrationDataStore, CalibrationSession
+
+logger = logging.getLogger(__name__)
 
 
 class CameraIcon(QWidget):
@@ -172,12 +177,16 @@ class WelcomeScreen(QWidget):
         # Start New Calibration button
         self.new_btn = QPushButton("\u25B6  Start New Calibration")
         self.new_btn.setObjectName("primary_button")
+        self.new_btn.setToolTip("Start a fresh calibration session.\n"
+                                "Configure platform type, add cameras, and perform calibration.")
         self.new_btn.clicked.connect(self._on_new_calibration)
         buttons_layout.addWidget(self.new_btn)
 
         # Load Existing Calibration button
         self.load_btn = QPushButton("\U0001F4C2  Load Existing Calibration")
         self.load_btn.setObjectName("secondary_button")
+        self.load_btn.setToolTip("Load the most recent calibration configuration.\n"
+                                 "Restores previous camera definitions and settings.")
         self.load_btn.clicked.connect(self._on_load_existing)
         buttons_layout.addWidget(self.load_btn)
 
@@ -224,14 +233,17 @@ class WelcomeScreen(QWidget):
         # Settings button
         self.settings_btn = QPushButton("\u2699 Settings")
         self.settings_btn.setObjectName("settings_button")
+        self.settings_btn.setToolTip("Open application settings.\n"
+                                      "Configure default IPs, ChArUco board parameters, and output directories.")
         self.settings_btn.clicked.connect(self.open_settings.emit)
         bottom_layout.addWidget(self.settings_btn)
 
         bottom_layout.addStretch()
 
         # Version label
-        version_label = QLabel("Version 1.0.0")
+        version_label = QLabel(f"Version {__version__}")
         version_label.setObjectName("version")
+        version_label.setToolTip("AxonVision Camera Calibration Tool version")
         bottom_layout.addWidget(version_label)
 
         main_layout.addLayout(bottom_layout)

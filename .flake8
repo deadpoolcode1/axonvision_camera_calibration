@@ -1,0 +1,41 @@
+[flake8]
+# Line length to match Black formatter
+max-line-length = 100
+
+# Ignore some rules that conflict with Black or are too strict
+extend-ignore =
+    # E203: whitespace before ':' (conflicts with Black)
+    E203,
+    # E501: line too long (handled by Black)
+    E501,
+    # W503: line break before binary operator (conflicts with Black)
+    W503,
+    # D100: Missing docstring in public module
+    D100,
+    # D104: Missing docstring in public package
+    D104,
+    # D107: Missing docstring in __init__
+    D107
+
+# Exclude common directories
+exclude =
+    .git,
+    __pycache__,
+    .venv,
+    venv,
+    build,
+    dist,
+    *.egg-info,
+    .eggs,
+    .tox
+
+# Per-file ignores for specific patterns
+per-file-ignores =
+    # Test files don't need docstrings
+    test_*.py: D101,D102,D103
+    *_test.py: D101,D102,D103
+    # __init__ files may have minimal content
+    __init__.py: F401
+
+# McCabe complexity threshold
+max-complexity = 15

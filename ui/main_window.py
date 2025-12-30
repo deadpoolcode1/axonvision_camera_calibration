@@ -4,14 +4,18 @@ Main Window for Camera Calibration Tool
 Central controller managing screen navigation and application state.
 """
 
+import logging
 from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtWidgets import (
-    QMainWindow, QStackedWidget, QWidget, QVBoxLayout, QMessageBox
+    QMainWindow, QStackedWidget, QWidget, QVBoxLayout, QHBoxLayout,
+    QMessageBox, QPushButton, QMenu
 )
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QAction
 
+from . import __version__
 from .styles import MAIN_STYLESHEET
 from .data_models import (
     CalibrationDataStore, CalibrationSession, PlatformConfiguration
@@ -20,6 +24,9 @@ from .screens.login_screen import LoginScreen
 from .screens.welcome_screen import WelcomeScreen
 from .screens.platform_config_screen import PlatformConfigScreen
 from .screens.camera_preview_screen import CameraPreviewScreen
+from .dialogs.log_viewer_dialog import LogViewerDialog
+
+logger = logging.getLogger(__name__)
 
 
 class MainWindow(QMainWindow):
@@ -48,7 +55,7 @@ class MainWindow(QMainWindow):
 
     def _setup_ui(self):
         """Setup the main window UI."""
-        self.setWindowTitle("AxonVision Camera Calibration Tool")
+        self.setWindowTitle(f"AxonVision Camera Calibration Tool v{__version__}")
         self.setMinimumSize(1100, 800)
         self.resize(1280, 900)
 
@@ -61,6 +68,31 @@ class MainWindow(QMainWindow):
 
         layout = QVBoxLayout(self.central_widget)
         layout.setContentsMargins(0, 0, 0, 0)
+
+        # Hamburger menu bar
+        menu_bar = QHBoxLayout()
+        menu_bar.setContentsMargins(10, 5, 10, 5)
+
+        self.hamburger_btn = QPushButton("\u2630")  # Hamburger icon (☰)
+        self.hamburger_btn.setFixedSize(40, 40)
+        self.hamburger_btn.setToolTip("Application menu - access logs, settings, and help")
+        self.hamburger_btn.setStyleSheet("""
+            QPushButton {
+                font-size: 20px;
+                background-color: transparent;
+                border: 1px solid #dee2e6;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #e3f2fd;
+            }
+        """)
+        self.hamburger_btn.clicked.connect(self._show_hamburger_menu)
+        menu_bar.addWidget(self.hamburger_btn)
+
+        menu_bar.addStretch()
+
+        layout.addLayout(menu_bar)
 
         self.screen_stack = QStackedWidget()
         layout.addWidget(self.screen_stack)
@@ -100,11 +132,13 @@ class MainWindow(QMainWindow):
         # Camera preview screen signals
         self.camera_preview_screen.cancel_requested.connect(self._on_camera_preview_cancel)
         self.camera_preview_screen.next_requested.connect(self._on_camera_preview_next)
+        self.camera_preview_screen.camera_removed.connect(self._on_camera_removed_preview)
 
     def _on_login_successful(self, username: str):
         """Handle successful login."""
         self.current_user = username
-        self.setWindowTitle(f"AxonVision Camera Calibration Tool - {username}")
+        self.setWindowTitle(f"AxonVision Camera Calibration Tool v{__version__} - {username}")
+        logger.info(f"User '{username}' logged in successfully")
         self.screen_stack.setCurrentWidget(self.welcome_screen)
 
     def _on_start_new(self):
@@ -204,6 +238,74 @@ class MainWindow(QMainWindow):
         # Save updated configuration
         self.data_store.last_platform_config = config
         self.data_store.save()
+
+    def _on_camera_removed_preview(self, camera_index: int):
+        """Handle camera removal from preview screen - save updated config."""
+        self.current_config = self.camera_preview_screen.config
+        self.data_store.last_platform_config = self.current_config
+        self.data_store.save()
+        logger.info(f"Camera at index {camera_index} removed from configuration")
+
+        # Also update the platform config screen in case user navigates back
+        self.platform_config_screen.set_config(self.current_config)
+
+    def _show_hamburger_menu(self):
+        """Show the hamburger menu with application options."""
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: white;
+                border: 1px solid #dee2e6;
+                border-radius: 4px;
+                padding: 5px;
+            }
+            QMenu::item {
+                padding: 8px 20px;
+                border-radius: 4px;
+            }
+            QMenu::item:selected {
+                background-color: #e3f2fd;
+            }
+        """)
+
+        # View Logs action
+        view_logs_action = QAction("View Logs", self)
+        view_logs_action.setToolTip("Open the log viewer to see application logs")
+        view_logs_action.triggered.connect(self._open_log_viewer)
+        menu.addAction(view_logs_action)
+
+        menu.addSeparator()
+
+        # About action
+        about_action = QAction(f"About v{__version__}", self)
+        about_action.setToolTip("Show application version and information")
+        about_action.triggered.connect(self._show_about)
+        menu.addAction(about_action)
+
+        # Show menu at button position
+        menu.exec(self.hamburger_btn.mapToGlobal(self.hamburger_btn.rect().bottomLeft()))
+
+    def _open_log_viewer(self):
+        """Open the log viewer dialog."""
+        dialog = LogViewerDialog(parent=self)
+        dialog.exec()
+
+    def _show_about(self):
+        """Show about dialog."""
+        QMessageBox.about(
+            self,
+            f"About AxonVision Calibration Tool",
+            f"<h3>AxonVision Camera Calibration Tool</h3>"
+            f"<p>Version: {__version__}</p>"
+            f"<p>A Qt-based graphical interface for camera calibration workflow.</p>"
+            f"<p>Features:</p>"
+            f"<ul>"
+            f"<li>Intrinsic camera calibration</li>"
+            f"<li>Extrinsic camera calibration</li>"
+            f"<li>Multi-camera platform support</li>"
+            f"<li>Real-time sensor data display</li>"
+            f"</ul>"
+        )
 
     def closeEvent(self, event):
         """Handle window close event."""
