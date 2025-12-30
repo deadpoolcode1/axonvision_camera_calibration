@@ -78,13 +78,16 @@ class MainWindow(QMainWindow):
         self.hamburger_btn.setToolTip("Application menu - access logs, settings, and help")
         self.hamburger_btn.setStyleSheet("""
             QPushButton {
-                font-size: 20px;
-                background-color: transparent;
-                border: 1px solid #dee2e6;
-                border-radius: 4px;
+                font-size: 24px;
+                font-weight: bold;
+                color: #17a2b8;
+                background-color: #f8f9fa;
+                border: 2px solid #17a2b8;
+                border-radius: 6px;
             }
             QPushButton:hover {
-                background-color: #e3f2fd;
+                background-color: #17a2b8;
+                color: white;
             }
         """)
         self.hamburger_btn.clicked.connect(self._show_hamburger_menu)
