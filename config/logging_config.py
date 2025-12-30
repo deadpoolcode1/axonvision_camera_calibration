@@ -72,36 +72,48 @@ class ColoredFormatter(logging.Formatter):
 
 
 def setup_logging(
-    log_level: str = "INFO",
+    log_level: Optional[str] = None,
     log_file: Optional[str] = None,
-    log_to_console: bool = True,
-    log_to_file: bool = True,
-    max_file_size_mb: int = 10,
-    backup_count: int = 5,
-    colored_console: bool = True
+    log_to_console: Optional[bool] = None,
+    log_to_file: Optional[bool] = None,
+    max_file_size_mb: Optional[int] = None,
+    backup_count: Optional[int] = None,
+    colored_console: Optional[bool] = None
 ) -> logging.Logger:
     """
     Setup application-wide logging configuration.
 
+    Settings are loaded from config/settings.yaml by default.
+    Parameters passed to this function override YAML settings.
+    Environment variables (LOG_LEVEL, LOG_FILE) override all other settings.
+
     Args:
         log_level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-        log_file: Path to log file (default: logs/calibration.log)
+        log_file: Path to log file (default from YAML: logs/calibration.log)
         log_to_console: Whether to log to console
         log_to_file: Whether to log to file
-        max_file_size_mb: Maximum size of log file before rotation
-        backup_count: Number of backup log files to keep
+        max_file_size_mb: Maximum size of log file before rotation (default from YAML: 1MB)
+        backup_count: Number of backup log files to keep (default from YAML: 5)
         colored_console: Whether to use colored output in console
 
     Returns:
         Configured root logger
     """
-    # Override with environment variables
+    # Import config here to avoid circular imports
+    from . import config
+
+    # Use YAML config as defaults, then override with function parameters
+    log_level = log_level or config.log_level
+    log_file = log_file or config.log_file_path
+    log_to_console = log_to_console if log_to_console is not None else config.log_console_enabled
+    log_to_file = log_to_file if log_to_file is not None else config.log_file_enabled
+    max_file_size_mb = max_file_size_mb if max_file_size_mb is not None else config.log_max_size_mb
+    backup_count = backup_count if backup_count is not None else config.log_backup_count
+    colored_console = colored_console if colored_console is not None else config.log_console_colored
+
+    # Override with environment variables (highest priority)
     log_level = os.environ.get('LOG_LEVEL', log_level).upper()
     log_file = os.environ.get('LOG_FILE', log_file)
-
-    # Default log file path
-    if log_file is None:
-        log_file = "logs/calibration.log"
 
     # Create logs directory if needed
     if log_to_file:

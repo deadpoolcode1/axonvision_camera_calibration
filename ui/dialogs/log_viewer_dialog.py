@@ -10,7 +10,7 @@ from typing import List, Optional
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QTextEdit, QComboBox, QLineEdit, QFrame, QApplication
+    QTextEdit, QComboBox, QLineEdit, QFrame, QApplication, QMessageBox
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QTextCursor, QColor, QTextCharFormat
@@ -116,11 +116,29 @@ class LogViewerDialog(QDialog):
 
         filter_layout.addStretch()
 
-        # Clear button
+        # Clear filter button
         clear_btn = QPushButton("Clear Filter")
         clear_btn.setToolTip("Clear all filters and show all logs")
         clear_btn.clicked.connect(self._clear_filters)
         filter_layout.addWidget(clear_btn)
+
+        # Clear logs button
+        clear_logs_btn = QPushButton("Clear Logs")
+        clear_logs_btn.setToolTip("Clear all log entries from the log file")
+        clear_logs_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['danger']};
+                color: white;
+                padding: 6px 12px;
+                border-radius: 4px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['danger_hover']};
+            }}
+        """)
+        clear_logs_btn.clicked.connect(self._clear_logs)
+        filter_layout.addWidget(clear_logs_btn)
 
         layout.addWidget(filter_frame)
 
@@ -192,6 +210,51 @@ class LogViewerDialog(QDialog):
         self.current_filter = "ALL"
         self.search_text = ""
         self._apply_filters()
+
+    def _clear_logs(self):
+        """Clear all log entries from the log file."""
+        reply = QMessageBox.question(
+            self,
+            "Clear Logs",
+            "Are you sure you want to clear all log entries?\n\nThis action cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+
+        if reply == QMessageBox.Yes:
+            log_path = Path(self.log_file)
+            try:
+                # Clear the log file by truncating it
+                if log_path.exists():
+                    with open(log_path, 'w', encoding='utf-8') as f:
+                        f.write("")  # Write empty content to clear the file
+
+                    # Also clear any rotated log files
+                    log_dir = log_path.parent
+                    log_name = log_path.name
+                    for rotated_file in log_dir.glob(f"{log_name}.*"):
+                        try:
+                            rotated_file.unlink()
+                        except Exception:
+                            pass  # Ignore errors deleting rotated files
+
+                    logging.getLogger(__name__).info("Log file cleared by user")
+
+                # Reload the display
+                self._all_logs = ["Log file cleared."]
+                self._apply_filters()
+
+                QMessageBox.information(
+                    self,
+                    "Logs Cleared",
+                    "All log entries have been cleared successfully."
+                )
+            except Exception as e:
+                QMessageBox.warning(
+                    self,
+                    "Error",
+                    f"Failed to clear logs: {e}"
+                )
 
     def _apply_filters(self):
         """Apply current filters to logs and display."""

@@ -107,6 +107,33 @@ class Config:
     def max_ai_central_cameras(self) -> int:
         return self.get('camera.max_ai_central_cameras', 1)
 
+    # Logging configuration properties
+    @property
+    def log_file_enabled(self) -> bool:
+        return self.get('logging.file.enabled', True)
+
+    @property
+    def log_file_path(self) -> str:
+        return self.get('logging.file.path', 'logs/calibration.log')
+
+    @property
+    def log_max_size_mb(self) -> int:
+        """Maximum log file size in MB before rotation (default: 1MB)."""
+        return self.get('logging.file.max_size_mb', 1)
+
+    @property
+    def log_backup_count(self) -> int:
+        """Number of backup log files to keep."""
+        return self.get('logging.file.backup_count', 5)
+
+    @property
+    def log_console_enabled(self) -> bool:
+        return self.get('logging.console.enabled', True)
+
+    @property
+    def log_console_colored(self) -> bool:
+        return self.get('logging.console.colored', True)
+
     def reload(self) -> None:
         """Reload configuration from file."""
         self._load_config()

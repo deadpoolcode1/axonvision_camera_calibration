@@ -73,25 +73,27 @@ class MainWindow(QMainWindow):
         menu_bar = QHBoxLayout()
         menu_bar.setContentsMargins(10, 5, 10, 5)
 
-        self.hamburger_btn = QPushButton("☰")  # Hamburger icon
+        self.hamburger_btn = QPushButton("≡")  # Hamburger icon (≡ renders better than ☰)
         self.hamburger_btn.setFixedSize(40, 40)
         self.hamburger_btn.setToolTip("Application menu - access logs, settings, and help")
         self.hamburger_btn.setStyleSheet("""
             QPushButton {
-                font-size: 28px;
-                font-weight: bold;
-                color: #333333;
-                background-color: #e8f4f8;
-                border: 2px solid #17a2b8;
+                font-size: 32px;
+                font-weight: 900;
+                color: #ffffff;
+                background-color: #17a2b8;
+                border: 2px solid #138496;
                 border-radius: 6px;
+                padding-bottom: 4px;
             }
             QPushButton:hover {
-                background-color: #17a2b8;
-                color: white;
+                background-color: #138496;
+                color: #ffffff;
+                border-color: #0d6d7e;
             }
             QPushButton:pressed {
-                background-color: #138496;
-                color: white;
+                background-color: #0d6d7e;
+                color: #ffffff;
             }
         """)
         self.hamburger_btn.clicked.connect(self._show_hamburger_menu)
