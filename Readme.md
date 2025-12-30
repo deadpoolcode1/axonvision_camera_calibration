@@ -662,6 +662,36 @@ cat demo_extrinsics.json
 
 ## Release Notes
 
+### v0.9.0
+
+#### Infrastructure Improvements
+- Add centralized YAML configuration with .env override support
+- Add pre-commit hooks (black, isort, flake8) for code quality
+- Lock all dependency versions in requirements.txt
+- Add pyproject.toml for modern Python project configuration
+
+#### Logging System
+- Implement standardized logging format with timestamps and file:line info
+- Add request ID (UUID) generation for session tracking
+- Display startup banner with version info
+- Add persistent logging to file with rotation (logs/calibration.log)
+- Replace print statements with proper logging in UI modules
+- Use appropriate log levels (DEBUG, INFO, WARNING, ERROR)
+- Implement cyclic logging with configurable max size (1MB default)
+
+#### Custom Exceptions
+- Add domain-specific exception hierarchy (Camera, Configuration, Calibration, Streaming, INS)
+- Include resolution steps in exception messages
+
+#### UI Improvements
+- Add hamburger menu with log viewer access
+- Improve hamburger menu visibility with solid cyan background and white text
+- Add "Clear Logs" button to View Logs dialog with confirmation
+- Add comprehensive hover tooltips throughout the UI
+- Add remove button on Camera Preview screen
+- Add actionable guidance to error messages
+- Fix camera type text format consistency (manager/worker roles)
+
 ### v1.0.0
 
 #### New Features
