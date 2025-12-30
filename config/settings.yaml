@@ -1,0 +1,107 @@
+# AxonVision Camera Calibration Tool - Configuration
+# This file contains default settings that can be overridden by environment variables
+
+# Application settings
+app:
+  name: "AxonVision Camera Calibration Tool"
+  version: "0.9.0"
+  # Note: Set environment variable LOG_LEVEL to override (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+  log_level: "INFO"
+
+# Camera defaults
+camera:
+  max_cameras: 6
+  max_ai_central_cameras: 1
+  default_ip_prefix: "192.168.1"
+  default_ip_start: 100
+  api_port: 5000
+  multicast_host: "239.255.0.1"
+  stream_port: 5010
+  connection_timeout: 5.0
+
+# Platform settings
+platform:
+  types:
+    - "Type A"
+    - "Type B"
+    - "Type C"
+    - "Custom"
+
+# Camera types and their display formats
+camera_types:
+  ai_central:
+    value: "AI CENTRAL"
+    display: "(manager)"
+  one_to_one:
+    value: "1:1"
+    display: "(worker)"
+  three_to_one_manager:
+    value: "3:1"
+    display: "(manager)"
+  three_to_one_worker:
+    value: "3:1"
+    display: "(worker)"
+
+# Mounting positions
+mounting_positions:
+  - "N/A"
+  - "Front Center"
+  - "Front Left"
+  - "Front Right"
+  - "Rear Center"
+  - "Rear Left"
+  - "Rear Right"
+  - "Left Up"
+  - "Left Center"
+  - "Left Down"
+  - "Right Up"
+  - "Right Center"
+  - "Right Down"
+
+# 3:1 cameras can only be in these positions
+valid_3_1_positions:
+  - "Front Center"
+  - "Rear Center"
+
+# Camera models
+camera_models:
+  - "IMX219"
+  - "IMX477"
+  - "IMX708"
+  - "OV5647"
+  - "Custom"
+
+# Logging configuration
+logging:
+  # Log file settings (can be overridden by LOG_FILE env var)
+  file:
+    enabled: true
+    path: "logs/calibration.log"
+    max_size_mb: 10
+    backup_count: 5
+  # Console output settings
+  console:
+    enabled: true
+    colored: true
+  # Log format
+  format: "%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d] - [request_id=%(request_id)s] - %(message)s"
+  date_format: "%Y-%m-%d %H:%M:%S"
+
+# Calibration settings
+calibration:
+  charuco:
+    squares_x: 7
+    squares_y: 5
+    square_size_cm: 4.0
+    marker_size_cm: 3.0
+    dictionary: "DICT_4X4_50"
+  intrinsic:
+    min_images: 10
+    target_images: 20
+    rms_threshold_good: 0.5
+    rms_threshold_acceptable: 1.0
+
+# Data storage
+storage:
+  sessions_file: "calibration_sessions.json"
+  intrinsics_dir: "camera_intrinsic"

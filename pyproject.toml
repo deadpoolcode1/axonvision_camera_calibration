@@ -1,0 +1,43 @@
+[project]
+name = "axonvision-camera-calibration"
+version = "0.9.0"
+description = "AxonVision Camera Calibration Tool - Qt-based GUI for camera calibration workflow"
+readme = "Readme.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "AxonVision"}
+]
+
+[tool.black]
+line-length = 100
+target-version = ['py38', 'py39', 'py310', 'py311', 'py312']
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+    | \.venv
+    | venv
+    | build
+    | dist
+    | __pycache__
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 100
+known_first_party = ["ui", "config"]
+skip = [".git", ".venv", "venv", "build", "dist", "__pycache__"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true

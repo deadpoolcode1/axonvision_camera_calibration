@@ -4,6 +4,8 @@ Login Screen
 User authentication screen for the calibration tool.
 """
 
+import logging
+
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QLineEdit, QMessageBox
@@ -11,7 +13,10 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPainter, QColor
 
+from .. import __version__
 from ..styles import COLORS
+
+logger = logging.getLogger(__name__)
 
 
 class LoginIcon(QWidget):
@@ -168,8 +173,9 @@ class LoginScreen(QWidget):
         bottom_layout = QHBoxLayout()
         bottom_layout.addStretch()
 
-        version_label = QLabel("Version 1.0.0")
+        version_label = QLabel(f"Version {__version__}")
         version_label.setObjectName("version")
+        version_label.setToolTip("AxonVision Camera Calibration Tool version")
         bottom_layout.addWidget(version_label)
 
         main_layout.addLayout(bottom_layout)

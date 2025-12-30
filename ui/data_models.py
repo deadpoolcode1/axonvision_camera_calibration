@@ -5,11 +5,14 @@ Defines data structures for calibration sessions, cameras, and platforms.
 """
 
 import json
+import logging
 import os
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any
+
+logger = logging.getLogger(__name__)
 
 
 # Mounting position options
@@ -32,8 +35,44 @@ MOUNTING_POSITIONS = [
 # 3:1 cameras can only be in these positions
 VALID_3_1_POSITIONS = ["Front Center", "Rear Center"]
 
-# Camera type options
-CAMERA_TYPES = ["AI CENTRAL", "1:1", "3:1 manager", "3:1 worker"]
+# Camera type options - Internal values for storage
+CAMERA_TYPES = ["AI CENTRAL", "1:1", "3:1 (manager)", "3:1 (worker)"]
+
+# Camera type display roles
+CAMERA_TYPE_ROLES = {
+    "AI CENTRAL": "(manager)",
+    "1:1": "(worker)",
+    "3:1 (manager)": "(manager)",
+    "3:1 (worker)": "(worker)",
+}
+
+
+def get_camera_type_display(camera_type: str) -> str:
+    """Get the display text for a camera type with its role.
+
+    Args:
+        camera_type: The camera type value (e.g., "AI CENTRAL", "1:1")
+
+    Returns:
+        Display string with role (e.g., "AI CENTRAL (manager)", "1:1 (worker)")
+    """
+    role = CAMERA_TYPE_ROLES.get(camera_type, "")
+    if camera_type.startswith("3:1"):
+        # For 3:1 types, the role is already in the type name
+        return camera_type
+    return f"{camera_type} {role}".strip()
+
+
+def get_camera_role(camera_type: str) -> str:
+    """Get just the role for a camera type.
+
+    Args:
+        camera_type: The camera type value
+
+    Returns:
+        Role string: "(manager)" or "(worker)"
+    """
+    return CAMERA_TYPE_ROLES.get(camera_type, "(worker)")
 
 # Maximum limits
 MAX_CAMERAS = 6
@@ -194,7 +233,7 @@ class CalibrationDataStore:
                     data['last_platform_config']
                 )
         except (json.JSONDecodeError, KeyError) as e:
-            print(f"Warning: Could not load calibration data: {e}")
+            logger.warning(f"Could not load calibration data: {e}")
 
     def save(self) -> None:
         """Save data to storage file."""

@@ -6,19 +6,30 @@
 opencv-contrib-python==4.8.1.78
 
 # Numerical computing (numpy 2.0 has breaking changes)
-numpy>=1.21,<2
+numpy==1.26.4
 
 # Scientific computing (optimization, spatial transforms)
-scipy>=1.7.0
+scipy==1.11.4
 
 # HTTP client for network camera API
-requests>=2.25.0
+requests==2.31.0
 
 # PDF report generation (optional - for --generate-pdf)
-reportlab>=4.0.0
+reportlab==4.1.0
 
 # Serial communication for INS hardware (VectorNav)
-pyserial>=3.5
+pyserial==3.5
 
 # Qt GUI framework (official Qt for Python)
-PySide6>=6.5.0
+PySide6==6.6.1
+
+# Configuration management
+PyYAML==6.0.1
+
+# Pre-commit hooks for code quality (development)
+# pre-commit==3.6.0
+
+# Code formatting (development)
+# black==24.3.0
+# isort==5.13.2
+# flake8==7.0.0
