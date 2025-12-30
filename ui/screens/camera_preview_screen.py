@@ -4,22 +4,26 @@ Camera Preview Screen (Screen 3)
 Hardware verification and intrinsic calibration:
 - Shows all cameras in a read-only table
 - Intrinsic calibration button for each camera
+- Remove button for each camera
 - Block progression if any camera missing intrinsic calibration
 """
 
+import logging
 from pathlib import Path
 from typing import Optional
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QTableWidget, QTableWidgetItem, QHeaderView,
-    QAbstractItemView, QMessageBox
+    QAbstractItemView, QMessageBox, QSizePolicy
 )
 from PySide6.QtCore import Qt, Signal
 
 from ..styles import COLORS
-from ..data_models import PlatformConfiguration
+from ..data_models import PlatformConfiguration, get_camera_type_display
 
 from ..dialogs import IntrinsicCalibrationDialog
+
+logger = logging.getLogger(__name__)
 
 
 class CameraPreviewScreen(QWidget):
@@ -27,11 +31,12 @@ class CameraPreviewScreen(QWidget):
     Camera Preview Screen
 
     Step 2 of 6 in the calibration workflow (Hardware Verification).
-    Displays camera list in a read-only table with intrinsic calibration buttons.
+    Displays camera list in a read-only table with intrinsic calibration and remove buttons.
     """
 
     cancel_requested = Signal()
     next_requested = Signal(PlatformConfiguration)
+    camera_removed = Signal(int)  # Emits camera index when removed
 
     def __init__(self, config: PlatformConfiguration = None, parent=None):
         super().__init__(parent)
@@ -121,7 +126,7 @@ class CameraPreviewScreen(QWidget):
 
     def _setup_camera_table(self):
         """Setup the camera table with columns."""
-        columns = ['#', 'Camera ID', 'Type', 'Model', 'Position', 'IP Address', 'Intrinsic Status', 'Action']
+        columns = ['#', 'Camera ID', 'Type', 'Model', 'Position', 'IP Address', 'Intrinsic Status', 'Calibrate', 'Remove']
         self.camera_table.setColumnCount(len(columns))
         self.camera_table.setHorizontalHeaderLabels(columns)
 
@@ -134,7 +139,8 @@ class CameraPreviewScreen(QWidget):
         header.setSectionResizeMode(4, QHeaderView.Stretch)           # Position - stretch to fill
         header.setSectionResizeMode(5, QHeaderView.ResizeToContents)  # IP Address
         header.setSectionResizeMode(6, QHeaderView.ResizeToContents)  # Intrinsic Status
-        header.setSectionResizeMode(7, QHeaderView.ResizeToContents)  # Action
+        header.setSectionResizeMode(7, QHeaderView.ResizeToContents)  # Calibrate
+        header.setSectionResizeMode(8, QHeaderView.ResizeToContents)  # Remove
 
         self.camera_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.camera_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -164,8 +170,10 @@ class CameraPreviewScreen(QWidget):
             id_item.setFlags(id_item.flags() & ~Qt.ItemIsSelectable)
             self.camera_table.setItem(row, 1, id_item)
 
-            # Type
-            type_item = QTableWidgetItem(camera.camera_type)
+            # Type (with display format)
+            type_display = get_camera_type_display(camera.camera_type)
+            type_item = QTableWidgetItem(type_display)
+            type_item.setToolTip(f"Camera role: {type_display}")
             type_item.setFlags(type_item.flags() & ~Qt.ItemIsSelectable)
             self.camera_table.setItem(row, 2, type_item)
 
@@ -204,12 +212,28 @@ class CameraPreviewScreen(QWidget):
                 lambda checked, cam_num=camera.camera_number: self._on_calibrate_clicked(cam_num)
             )
 
-            # Create a container widget for the button
-            btn_container = QWidget()
-            btn_layout = QHBoxLayout(btn_container)
-            btn_layout.setContentsMargins(5, 2, 5, 2)
-            btn_layout.addWidget(calibrate_btn)
-            self.camera_table.setCellWidget(row, 7, btn_container)
+            # Create a container widget for the calibrate button
+            calibrate_container = QWidget()
+            calibrate_layout = QHBoxLayout(calibrate_container)
+            calibrate_layout.setContentsMargins(5, 2, 5, 2)
+            calibrate_layout.addWidget(calibrate_btn)
+            self.camera_table.setCellWidget(row, 7, calibrate_container)
+
+            # Remove button
+            remove_btn = QPushButton("X")
+            remove_btn.setObjectName("remove_button")
+            remove_btn.setToolTip(f"Remove {camera.camera_id} from the configuration")
+            remove_btn.setFixedSize(30, 30)
+            remove_btn.clicked.connect(
+                lambda checked, cam_idx=row: self._on_remove_clicked(cam_idx)
+            )
+
+            # Create a container widget for the remove button
+            remove_container = QWidget()
+            remove_layout = QHBoxLayout(remove_container)
+            remove_layout.setContentsMargins(5, 2, 5, 2)
+            remove_layout.addWidget(remove_btn, alignment=Qt.AlignCenter)
+            self.camera_table.setCellWidget(row, 8, remove_container)
 
             self.camera_table.setRowHeight(row, 45)
 
@@ -254,6 +278,37 @@ class CameraPreviewScreen(QWidget):
             # Refresh the table to update intrinsic status
             self._populate_camera_table()
 
+    def _on_remove_clicked(self, camera_index: int):
+        """Handle remove button click for a camera."""
+        if camera_index >= len(self.config.cameras):
+            return
+
+        camera = self.config.cameras[camera_index]
+
+        # Show confirmation dialog
+        reply = QMessageBox.question(
+            self,
+            "Remove Camera",
+            f"Are you sure you want to remove camera '{camera.camera_id}'?\n\n"
+            "This will remove the camera from the current configuration.\n"
+            "Any existing calibration files will not be deleted.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+
+        if reply != QMessageBox.Yes:
+            return
+
+        # Remove camera from config
+        logger.info(f"Removing camera {camera.camera_id} from configuration")
+        self.config.remove_camera(camera_index)
+
+        # Refresh table
+        self._populate_camera_table()
+
+        # Emit signal so parent can save updated config
+        self.camera_removed.emit(camera_index)
+
     def _on_cancel_clicked(self):
         """Handle Cancel/Back button click."""
         self.cancel_requested.emit()
@@ -272,7 +327,10 @@ class CameraPreviewScreen(QWidget):
                 "Intrinsic Calibration Required",
                 f"The following cameras are missing intrinsic calibration:\n\n"
                 + "\n".join(f"  • {cam_id}" for cam_id in missing_intrinsics) +
-                "\n\nPlease complete intrinsic calibration for all cameras before proceeding."
+                "\n\nTo proceed:\n"
+                "1. Click the 'Calibrate' button next to each camera listed above\n"
+                "2. Follow the on-screen instructions to capture calibration images\n"
+                "3. Once all cameras show '✓ Calibrated', click Next"
             )
             return
 

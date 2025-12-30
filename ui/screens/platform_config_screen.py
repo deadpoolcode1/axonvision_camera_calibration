@@ -599,7 +599,10 @@ class CameraTableWidget(QTableWidget):
         type_combo = QComboBox()
         type_combo.addItems(CAMERA_TYPES)
         type_combo.setCurrentText(camera.camera_type)
-        type_combo.setToolTip("Select camera type: AI CENTRAL (1 max), 1:1, 3:1 manager, or 3:1 worker")
+        type_combo.setToolTip("Select camera type:\n"
+                               "  - AI CENTRAL (manager) - max 1 per platform\n"
+                               "  - 1:1 (worker) - standard camera\n"
+                               "  - 3:1 (manager/worker) - Front/Rear Center only")
         type_combo.currentTextChanged.connect(lambda text, r=row: self._on_type_changed(r, text))
         self.setCellWidget(row, 2, type_combo)
 
@@ -1028,27 +1031,30 @@ class PlatformConfigScreen(QWidget):
 
         # Check that at least one camera is configured
         if not cameras:
-            errors.append("At least one camera must be configured")
-            self.validation_label.setText("⚠ At least one camera must be configured")
+            errors.append("At least one camera must be configured. Click '+ Add Camera' to add a camera.")
+            self.validation_label.setText("⚠ At least one camera must be configured. Click '+ Add Camera' to add one.")
             self.validation_label.show()
             return False, errors
 
         # Check AI Central count
         ai_central_count = sum(1 for cam in cameras if cam['camera_type'] == 'AI CENTRAL')
         if ai_central_count > MAX_AI_CENTRAL_CAMERAS:
-            errors.append(f"Only {MAX_AI_CENTRAL_CAMERAS} AI CENTRAL camera allowed (found {ai_central_count})")
+            errors.append(f"Only {MAX_AI_CENTRAL_CAMERAS} AI CENTRAL camera allowed (found {ai_central_count}). "
+                         f"Change one camera type to '1:1' or '3:1'.")
 
         # Check 3:1 positions (both manager and worker)
         for i, cam in enumerate(cameras):
             if cam['camera_type'].startswith('3:1'):
                 pos = cam['mounting_position']
                 if pos not in VALID_3_1_POSITIONS and pos != "N/A":
-                    errors.append(f"Camera {cam['camera_number']}: 3:1 cameras can only be at Front Center or Rear Center")
+                    errors.append(f"Camera {cam['camera_number']}: 3:1 cameras can only be mounted at Front Center or "
+                                 f"Rear Center. Change position or use a different camera type.")
 
         # Check for N/A positions
         na_cameras = [cam['camera_number'] for cam in cameras if cam['mounting_position'] == 'N/A']
         if na_cameras:
-            errors.append(f"Camera(s) {', '.join(map(str, na_cameras))}: Position must be selected (currently N/A)")
+            errors.append(f"Camera(s) {', '.join(map(str, na_cameras))}: Select a mounting position from the dropdown "
+                         f"(currently set to N/A).")
 
         # Check for duplicate positions (excluding N/A)
         positions = {}
@@ -1058,7 +1064,7 @@ class PlatformConfigScreen(QWidget):
                 if pos in positions:
                     duplicate_rows.append(i)
                     duplicate_rows.append(positions[pos])
-                    errors.append(f"Duplicate position '{pos}' found")
+                    errors.append(f"Duplicate position '{pos}' found. Each camera must have a unique mounting position.")
                 else:
                     positions[pos] = i
 
