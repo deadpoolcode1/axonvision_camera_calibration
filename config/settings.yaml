@@ -77,7 +77,9 @@ logging:
   file:
     enabled: true
     path: "logs/calibration.log"
-    max_size_mb: 10
+    # Maximum log file size in MB before rotation (cyclic logging)
+    max_size_mb: 1
+    # Number of backup log files to keep
     backup_count: 5
   # Console output settings
   console:
