@@ -662,6 +662,25 @@ cat demo_extrinsics.json
 
 ## Release Notes
 
+### v0.9.1
+
+#### Docker Support
+- Add Docker containerization with PySide6 GUI support
+- Create docker-compose.yml for easy orchestration with X11 display forwarding
+- Add run.sh script with commands: build, run, detach, logs, shell, stop, status, clean
+- Add Docker README with setup instructions and troubleshooting guide
+
+#### Docker Build Fixes
+- Fix Docker build for Ubuntu 24.04 base image compatibility
+- Fix Docker build for Ubuntu 24.04 PEP 668 compliance (externally-managed-environment)
+- Fix Docker volume permission error for logs directory
+- Fix Docker build by including entrypoint.sh in build context
+- Fix PySide6 import error by activating venv in entrypoint
+- Align Docker environment with local development setup
+
+#### Bug Fixes
+- Fix TypeError in remove camera button click handler
+
 ### v0.9.0
 
 #### Infrastructure Improvements
