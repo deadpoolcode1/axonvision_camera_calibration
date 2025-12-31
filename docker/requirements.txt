@@ -1,0 +1,23 @@
+# AxonVision Camera Calibration Tool - Python Dependencies
+
+# Qt GUI Framework
+PySide6>=6.5.0
+
+# Computer Vision
+opencv-contrib-python==4.8.1.78
+numpy<2
+
+# Scientific Computing
+scipy>=1.10.0
+
+# HTTP Client for camera API
+requests>=2.28.0
+
+# PDF Report Generation
+reportlab>=4.0.0
+
+# Serial Communication (for INS)
+pyserial>=3.5
+
+# Optional: Pillow for image processing
+Pillow>=9.0.0

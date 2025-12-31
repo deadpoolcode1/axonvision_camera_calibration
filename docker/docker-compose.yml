@@ -1,0 +1,64 @@
+# AxonVision Camera Calibration Tool - Docker Compose Configuration
+# 
+# Usage:
+#   docker-compose up --build        # Build and run
+#   docker-compose up -d             # Run in background
+#   docker-compose down              # Stop and remove
+#   docker-compose logs -f           # View logs
+
+version: '3.8'
+
+services:
+  axonvision:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: axonvision-calibration:latest
+    container_name: axonvision-calibration
+
+    # X11 display forwarding for GUI
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+      - QT_QPA_PLATFORM=xcb
+      - QT_X11_NO_MITSHM=1
+      - XAUTHORITY=/tmp/.docker.xauth
+      - GDK_BACKEND=x11
+      - LOG_LEVEL=INFO
+
+    # Mount X11 socket and auth
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${XAUTHORITY:-~/.Xauthority}:/tmp/.docker.xauth:ro
+      # Mount for calibration data persistence
+      - ./calibration_data:/app/calibration_data
+      # Mount for output files
+      - ./output:/app/output
+
+    # Network configuration for camera access
+    network_mode: host
+
+    # Device access for serial ports (INS) and cameras
+    devices:
+      - /dev/ttyUSB0:/dev/ttyUSB0  # INS serial port
+      # Add more serial ports if needed:
+      # - /dev/ttyUSB1:/dev/ttyUSB1
+
+    # Security options for X11
+    security_opt:
+      - seccomp:unconfined
+
+    # Allow IPC for shared memory
+    ipc: host
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Resource limits (optional)
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '4'
+    #       memory: 4G
+    #     reservations:
+    #       cpus: '2'
+    #       memory: 2G
