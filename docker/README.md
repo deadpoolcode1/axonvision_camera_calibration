@@ -4,47 +4,52 @@ Docker container for the AxonVision Camera Calibration Tool with PySide6 GUI.
 
 ## Prerequisites
 
-- Docker and Docker Compose installed
+- Docker Engine 20.10+ with Compose plugin
 - X11 display server (Linux with X11 or XWayland)
 - For INS support: serial port access (`/dev/ttyUSB0`)
 
 ## Quick Start
 
+Run these commands from the **project root** directory:
+
 ```bash
-# 1. Clone/copy your application files to this directory
-#    Ensure your project structure includes:
-#    - main_ui.py
-#    - ui/ (module directory)
-#    - config/ (module directory)
-#    - *.py (calibration modules)
+# 1. Make the run script executable
+chmod +x docker/run.sh
 
-# 2. Make the run script executable
-chmod +x run.sh
-
-# 3. Build and run
-./run.sh build
+# 2. Build and run
+./docker/run.sh build
 ```
+
+The GUI window will appear on your desktop.
 
 ## Usage
 
+All commands should be run from the **project root**:
+
 ```bash
 # Start the application
-./run.sh
+./docker/run.sh
+
+# Build and start (first time or after code changes)
+./docker/run.sh build
 
 # Start in background
-./run.sh detach
+./docker/run.sh detach
 
 # View logs
-./run.sh logs
+./docker/run.sh logs
 
 # Open shell in container
-./run.sh shell
+./docker/run.sh shell
 
 # Stop the application
-./run.sh stop
+./docker/run.sh stop
+
+# Check status
+./docker/run.sh status
 
 # Clean up (remove container and image)
-./run.sh clean
+./docker/run.sh clean
 ```
 
 ## Manual Docker Commands
@@ -55,48 +60,46 @@ If you prefer not to use the run script:
 # Allow X11 access
 xhost +local:docker
 
-# Build image
-docker-compose build
-
-# Run container
-docker-compose up
+# Build and run (from project root)
+docker compose -f docker/docker-compose.yml up --build
 
 # Run in background
-docker-compose up -d
+docker compose -f docker/docker-compose.yml up -d
 
 # Stop
-docker-compose down
+docker compose -f docker/docker-compose.yml down
 ```
 
 ## Project Structure
 
 ```
-axonvision-docker/
-├── Dockerfile           # Container image definition
-├── docker-compose.yml   # Container orchestration
-├── requirements.txt     # Python dependencies
-├── run.sh              # Startup script with X11 setup
-├── .dockerignore       # Files to exclude from build
-├── README.md           # This file
+project-root/
+├── docker/
+│   ├── Dockerfile           # Container image definition
+│   ├── docker-compose.yml   # Container orchestration
+│   ├── requirements.txt     # Python dependencies (for Docker)
+│   ├── run.sh              # Startup script with X11 setup
+│   └── README.md           # This file
 │
-├── main_ui.py          # Main application entry point
-├── ui/                 # UI module (copy your files here)
-├── config/             # Config module (copy your files here)
+├── main_ui.py              # Main application entry point
+├── ui/                     # UI module
+├── config/                 # Config module
 ├── camera_streaming.py
 ├── extrinsic_calibration.py
 ├── intrinsic_calibration.py
 ├── ins_reader.py
+├── requirements.txt        # Main dependencies
 │
-├── calibration_data/   # Mounted volume for calibration data
-└── output/             # Mounted volume for output files
+├── calibration_data/       # Mounted volume for calibration data
+├── output/                 # Mounted volume for output files
+└── logs/                   # Mounted volume for logs
 ```
 
 ## Configuration
 
 ### Serial Port Access (INS)
 
-The container is configured to access `/dev/ttyUSB0` for the INS device.
-To add more serial ports, edit `docker-compose.yml`:
+To enable INS serial port access, uncomment the devices section in `docker/docker-compose.yml`:
 
 ```yaml
 devices:
@@ -107,7 +110,7 @@ devices:
 ### Network Camera Access
 
 The container uses `network_mode: host` for direct network access to cameras.
-If you need isolated networking, modify `docker-compose.yml`:
+If you need isolated networking, modify `docker/docker-compose.yml`:
 
 ```yaml
 # Remove network_mode: host and add:
@@ -121,10 +124,13 @@ networks:
 
 ### Persistent Data
 
-Two directories are mounted for data persistence:
+Three directories are mounted for data persistence:
 
-- `./calibration_data` → `/app/calibration_data` - Calibration files
-- `./output` → `/app/output` - Generated reports and exports
+| Host Directory | Container Path | Purpose |
+|----------------|----------------|---------|
+| `./calibration_data` | `/app/calibration_data` | Calibration files |
+| `./output` | `/app/output` | Generated reports |
+| `./logs` | `/app/logs` | Application logs |
 
 ### Environment Variables
 
@@ -148,7 +154,7 @@ Two directories are mounted for data persistence:
 # Reset X11 permissions
 xhost +local:docker
 export DISPLAY=:0
-./run.sh
+./docker/run.sh
 ```
 
 ### Serial port permission denied
@@ -159,21 +165,21 @@ sudo usermod -aG dialout $USER
 # Log out and back in, then retry
 ```
 
+### Container exits immediately
+
+Check logs for errors:
+
+```bash
+./docker/run.sh logs
+```
+
 ### OpenCV/Qt conflicts
 
 The Dockerfile sets environment variables to prevent Qt/GTK conflicts.
 If issues persist, try:
 
 ```bash
-docker-compose run --rm -e QT_DEBUG_PLUGINS=1 axonvision
-```
-
-### Container exits immediately
-
-Check logs for errors:
-
-```bash
-docker-compose logs
+docker compose -f docker/docker-compose.yml run --rm -e QT_DEBUG_PLUGINS=1 axonvision
 ```
 
 ## Building for Different Platforms
@@ -181,7 +187,7 @@ docker-compose logs
 For ARM64 (Jetson, Raspberry Pi):
 
 ```bash
-docker buildx build --platform linux/arm64 -t axonvision-calibration:arm64 .
+docker buildx build --platform linux/arm64 -f docker/Dockerfile -t axonvision-calibration:arm64 .
 ```
 
 ## License

@@ -723,3 +723,159 @@ cat demo_extrinsics.json
 - Fix: Don't auto-create 4 default cameras when starting new calibration
 - Fix stale camera IP persistence when navigating between screens
 - Fix GStreamer warnings
+
+---
+
+## Docker Installation & Usage
+
+Run the full application (including UI) in a Docker container. This is useful for consistent environments and easy deployment.
+
+### Prerequisites
+
+- Docker Engine 20.10+ with Compose plugin
+- Linux with X11 display server (for GUI)
+- Network access to cameras
+
+### Install Docker
+
+```bash
+# Ubuntu/Debian
+sudo apt update
+sudo apt install docker.io docker-compose-v2
+
+# Add your user to docker group (logout/login required)
+sudo usermod -aG docker $USER
+
+# Verify installation
+docker --version
+docker compose version
+```
+
+### Quick Start
+
+```bash
+# 1. Make the run script executable
+chmod +x docker/run.sh
+
+# 2. Build and run the application
+./docker/run.sh build
+```
+
+The GUI window will appear on your desktop.
+
+### Docker Commands
+
+```bash
+# Build and run (first time or after changes)
+./docker/run.sh build
+
+# Run (if already built)
+./docker/run.sh
+
+# Run in background (detached mode)
+./docker/run.sh detach
+
+# View logs
+./docker/run.sh logs
+
+# Stop the container
+./docker/run.sh stop
+
+# Open shell inside container
+./docker/run.sh shell
+
+# Check container status
+./docker/run.sh status
+
+# Clean up (remove container and image)
+./docker/run.sh clean
+```
+
+### Manual Docker Commands
+
+If you prefer not to use the run script:
+
+```bash
+# Allow X11 access for GUI
+xhost +local:docker
+
+# Build and run
+docker compose -f docker/docker-compose.yml up --build
+
+# Run in background
+docker compose -f docker/docker-compose.yml up -d
+
+# Stop
+docker compose -f docker/docker-compose.yml down
+```
+
+### Data Persistence
+
+The following directories are mounted as volumes for data persistence:
+
+| Host Directory | Container Path | Purpose |
+|----------------|----------------|---------|
+| `./calibration_data` | `/app/calibration_data` | Calibration files |
+| `./output` | `/app/output` | Generated reports |
+| `./logs` | `/app/logs` | Application logs |
+
+### Serial Port Access (INS)
+
+To enable INS serial port access, uncomment the devices section in `docker/docker-compose.yml`:
+
+```yaml
+devices:
+  - /dev/ttyUSB0:/dev/ttyUSB0
+```
+
+Ensure your user has permission to access serial ports:
+
+```bash
+sudo usermod -aG dialout $USER
+# Logout and login for changes to take effect
+```
+
+### Troubleshooting Docker
+
+#### GUI doesn't appear
+
+```bash
+# Allow Docker to access X11 display
+xhost +local:docker
+
+# Verify DISPLAY variable
+echo $DISPLAY
+```
+
+#### "Cannot connect to X server"
+
+```bash
+# Reset X11 permissions and run
+xhost +local:docker
+export DISPLAY=:0
+./docker/run.sh
+```
+
+#### Permission denied errors
+
+```bash
+# Add user to docker group
+sudo usermod -aG docker $USER
+
+# Logout and login, then retry
+```
+
+#### Container exits immediately
+
+```bash
+# Check logs for errors
+./docker/run.sh logs
+```
+
+### Building for ARM64 (Jetson, Raspberry Pi)
+
+```bash
+docker buildx build --platform linux/arm64 \
+  -f docker/Dockerfile \
+  -t axonvision-calibration:arm64 .
+```
