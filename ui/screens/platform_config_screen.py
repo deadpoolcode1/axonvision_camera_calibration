@@ -633,7 +633,7 @@ class CameraTableWidget(QTableWidget):
         remove_btn = QPushButton("Remove")
         remove_btn.setObjectName("remove_button")
         remove_btn.setToolTip("Remove this camera from the configuration")
-        remove_btn.clicked.connect(lambda checked, r=row: self._on_remove_clicked(r))
+        remove_btn.clicked.connect(lambda checked=False, r=row: self._on_remove_clicked(r))
         remove_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         remove_container = QWidget()
         remove_layout = QHBoxLayout(remove_container)
