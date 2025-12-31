@@ -82,8 +82,18 @@ COPY requirements.txt .
 RUN pip3 install --no-cache-dir --upgrade pip && \
     pip3 install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY . .
+# Copy application code (from project root context)
+COPY main_ui.py .
+COPY camera_streaming.py .
+COPY extrinsic_calibration.py .
+COPY intrinsic_calibration.py .
+COPY ins_reader.py .
+COPY ui/ ./ui/
+COPY config/ ./config/
+COPY camera_intrinsic/ ./camera_intrinsic/
+
+# Create directories for output data
+RUN mkdir -p /app/calibration_data /app/output /app/logs
 
 # Set ownership to non-root user
 RUN chown -R axonvision:axonvision /app
@@ -91,5 +101,5 @@ RUN chown -R axonvision:axonvision /app
 # Switch to non-root user
 USER axonvision
 
-# Default command
+# Default command - run the GUI application
 CMD ["python3", "main_ui.py"]

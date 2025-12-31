@@ -1,0 +1,48 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+ENV/
+env/
+.eggs/
+*.egg-info/
+*.egg
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker (don't copy docker files into container)
+docker/
+
+# Output directories (mounted as volumes)
+calibration_data/
+output/
+logs/
+
+# Development
+.pre-commit-config.yaml
+.flake8
+pyproject.toml
+
+# Documentation (not needed in container)
+*.md
+!requirements.txt
+
+# Sample files
+*.png
