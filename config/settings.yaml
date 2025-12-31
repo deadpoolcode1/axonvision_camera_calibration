@@ -30,7 +30,7 @@ platform:
 # Camera types and their display formats
 camera_types:
   ai_central:
-    value: "AI CENTRAL"
+    value: "AI Central"
     display: "(manager)"
   one_to_one:
     value: "1:1"
