@@ -107,8 +107,12 @@ RUN mkdir -p /app/calibration_data /app/output /app/logs
 # Set ownership to non-root user
 RUN chown -R axonvision:axonvision /app
 
-# Switch to non-root user
-USER axonvision
+# Copy and setup entrypoint script (must run as root to fix volume permissions)
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Use entrypoint to fix permissions on mounted volumes, then switch to axonvision user
+ENTRYPOINT ["/entrypoint.sh"]
 
 # Default command - run the GUI application
 CMD ["python3", "main_ui.py"]
