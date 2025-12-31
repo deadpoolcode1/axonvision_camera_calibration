@@ -12,5 +12,5 @@ set -e
 # These directories are mounted from the host and may have wrong permissions
 chown -R axonvision:axonvision /app/calibration_data /app/output /app/logs 2>/dev/null || true
 
-# Execute the command as the axonvision user
-exec su -s /bin/bash axonvision -c "exec $*"
+# Execute the command as the axonvision user with virtual environment activated
+exec su -s /bin/bash axonvision -c "source /app/venv/bin/activate && exec $*"
