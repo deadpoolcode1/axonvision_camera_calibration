@@ -1,18 +1,22 @@
 # AxonVision Camera Calibration Tool - Docker Compose Configuration
-# 
-# Usage:
-#   docker-compose up --build        # Build and run
-#   docker-compose up -d             # Run in background
-#   docker-compose down              # Stop and remove
-#   docker-compose logs -f           # View logs
+#
+# Usage (from project root):
+#   docker compose -f docker/docker-compose.yml up --build    # Build and run
+#   docker compose -f docker/docker-compose.yml up -d         # Run in background
+#   docker compose -f docker/docker-compose.yml down          # Stop and remove
+#   docker compose -f docker/docker-compose.yml logs -f       # View logs
+#
+# Or use the run script:
+#   ./docker/run.sh build    # Build and run
+#   ./docker/run.sh          # Run (if already built)
 
 version: '3.8'
 
 services:
   axonvision:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: docker/Dockerfile
     image: axonvision-calibration:latest
     container_name: axonvision-calibration
 
@@ -30,18 +34,21 @@ services:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ${XAUTHORITY:-~/.Xauthority}:/tmp/.docker.xauth:ro
       # Mount for calibration data persistence
-      - ./calibration_data:/app/calibration_data
+      - ../calibration_data:/app/calibration_data
       # Mount for output files
-      - ./output:/app/output
+      - ../output:/app/output
+      # Mount for logs
+      - ../logs:/app/logs
 
     # Network configuration for camera access
     network_mode: host
 
     # Device access for serial ports (INS) and cameras
-    devices:
-      - /dev/ttyUSB0:/dev/ttyUSB0  # INS serial port
-      # Add more serial ports if needed:
-      # - /dev/ttyUSB1:/dev/ttyUSB1
+    # Comment out if device doesn't exist to avoid startup errors
+    # devices:
+    #   - /dev/ttyUSB0:/dev/ttyUSB0  # INS serial port
+    #   # Add more serial ports if needed:
+    #   # - /dev/ttyUSB1:/dev/ttyUSB1
 
     # Security options for X11
     security_opt:
