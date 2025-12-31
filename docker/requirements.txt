@@ -1,11 +1,17 @@
 # AxonVision Camera Calibration Tool - Python Dependencies
+# Pinned to match local development environment (Ubuntu 24.04, Python 3.12.3)
 
-# Qt GUI Framework
-PySide6>=6.5.0
+# Qt GUI Framework - MUST match local version exactly
+PySide6==6.10.1
+PySide6-Addons==6.10.1
+PySide6-Essentials==6.10.1
+shiboken6==6.10.1
 
 # Computer Vision
 opencv-contrib-python==4.8.1.78
-numpy<2
+
+# NumPy - pinned to match local
+numpy==1.26.4
 
 # Scientific Computing
 scipy>=1.10.0
@@ -21,3 +27,6 @@ pyserial>=3.5
 
 # Optional: Pillow for image processing
 Pillow>=9.0.0
+
+# Configuration management
+PyYAML>=6.0.1

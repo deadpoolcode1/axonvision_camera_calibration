@@ -1,6 +1,6 @@
 # AxonVision Camera Calibration Tool - Docker Image
-# Base image with Ubuntu 22.04 for Qt/X11 compatibility
-FROM ubuntu:22.04
+# Base image with Ubuntu 24.04 to match development environment
+FROM ubuntu:24.04
 
 LABEL maintainer="AxonVision"
 LABEL description="AxonVision Camera Calibration Tool with PySide6 GUI"
@@ -19,10 +19,11 @@ ENV OPENCV_VIDEOIO_PRIORITY_QT=0
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    # Python
-    python3 \
+    # Python 3.12 (matching local development environment)
+    python3.12 \
+    python3.12-venv \
+    python3.12-dev \
     python3-pip \
-    python3-dev \
     # Qt/X11 dependencies
     libxcb1 \
     libxcb-cursor0 \
@@ -78,9 +79,12 @@ WORKDIR /app
 # Copy requirements first for better caching
 COPY requirements.txt .
 
+# Set python3.12 as the default python3
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
+
 # Install Python dependencies
-RUN pip3 install --no-cache-dir --upgrade pip && \
-    pip3 install --no-cache-dir -r requirements.txt
+RUN python3 -m pip install --no-cache-dir --upgrade pip && \
+    python3 -m pip install --no-cache-dir -r requirements.txt
 
 # Copy application code (from project root context)
 COPY main_ui.py .
