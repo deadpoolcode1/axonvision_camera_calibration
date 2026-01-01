@@ -1,0 +1,228 @@
+# EdgeSA Configuration
+# This file contains default settings for the EdgeSA distributed surveillance system.
+# Environment variables take precedence over these values.
+# Environment variable format: SECTION_SUBSECTION_KEY (e.g., DISCOVERY_TIMEOUT_MS)
+
+# =============================================================================
+# Discovery Service Configuration
+# =============================================================================
+discovery:
+  # Base URL for the Hardware Discovery Service
+  base_url: "http://localhost:8000"
+  # mDNS scan timeout in milliseconds (250-15000)
+  timeout_ms: 5000
+  # mDNS service type to discover
+  mdns_service_type: "_axon-vision._tcp.local."
+  # API version prefix
+  api_version: "v1"
+
+# =============================================================================
+# Device Type Configuration
+# =============================================================================
+device_types:
+  # AI Central - Manager only, no local cameras
+  ai_central:
+    hostname_pattern: "aicentral-*"
+    hostname_prefix: "aicentral"
+    role: "manager"
+    can_switch_mode: false
+    max_input_streams: 6
+    stream_ports:
+      mjpeg: []
+      mpegts: []
+
+  # 1:1 Smart Cluster - Worker only, 1 camera input
+  smartcluster:
+    hostname_pattern: "smartcluster-*"
+    hostname_prefix: "smartcluster"
+    role: "worker"
+    can_switch_mode: false
+    max_input_streams: 1
+    stream_ports:
+      mjpeg:
+        vis: 8080
+        thermal: 9080
+      mpegts:
+        - 5005
+
+  # 3:1 Three Cluster - Worker OR Manager, 3 camera inputs
+  threecluster:
+    hostname_pattern: "threecluster-*"
+    hostname_prefix: "threecluster"
+    role: "switchable"  # Can be worker or manager
+    can_switch_mode: true
+    max_input_streams: 3
+    max_manager_streams: 3  # Additional streams when in manager mode
+    stream_ports:
+      # Slot 0
+      slot_0:
+        mjpeg:
+          vis: 8079
+          thermal: 9079
+        mpegts: 5004
+      # Slot 1
+      slot_1:
+        mjpeg:
+          vis: 8080
+          thermal: 9080
+        mpegts: 5005
+      # Slot 2
+      slot_2:
+        mjpeg:
+          vis: 8081
+          thermal: 9081
+        mpegts: 5006
+
+# =============================================================================
+# SSH Configuration for Device Provisioning
+# =============================================================================
+ssh:
+  # Default credentials (can be overridden per-request)
+  default_username: "nvidia"
+  default_password: "nvidia"
+  # Connection settings
+  connect_timeout_ms: 5000
+  auth_timeout_ms: 8000
+  # Maximum concurrent SSH connections (1-5)
+  max_concurrency: 3
+
+# =============================================================================
+# Device Configuration Paths
+# All configuration files reside in /etc/axon/ on each device
+# =============================================================================
+device_paths:
+  # Base configuration directory on devices
+  base_path: "/etc/axon"
+  # Configuration files
+  files:
+    mode: "mode.env"
+    manager_address: "manager_address.env"
+    position: "position.env"
+    sensors_config: "sensors_config.yml"
+  # Backup directory for snapshots (relative to base_path)
+  snapshots_dir: "snapshots"
+
+# =============================================================================
+# Device REST API Configuration
+# =============================================================================
+device_api:
+  # Default port for device REST API
+  port: 5000
+  # Request timeout in seconds
+  timeout: 10.0
+  # API endpoints
+  endpoints:
+    # Mode management (3:1 only)
+    pipeline_mode: "/api/pipeline_mode"
+    # Worker endpoints
+    manager_connection: "/api/manager_connection"
+    streams: "/config/streams/{slot}/stream-id"
+    position: "/config/position"
+    # Manager endpoints
+    sensors_config: "/api/sensors_config"
+    all_sensor_urls: "/api/all_sensor_urls"
+    # Health check
+    health: "/health"
+
+# =============================================================================
+# Position Configuration
+# =============================================================================
+positions:
+  # All available mounting positions
+  available:
+    - "Front"
+    - "Rear"
+    - "Front Left"
+    - "Front Right"
+    - "Front Center"
+    - "Rear Left"
+    - "Rear Right"
+    - "Rear Center"
+    - "Left"
+    - "Right"
+
+  # Position constraints by device type
+  constraints:
+    # Positions only allowed for 3:1 devices
+    threecluster_only:
+      - "Front"
+      - "Rear"
+    # Positions allowed for 1:1 and 3:1 devices
+    all_workers:
+      - "Front Left"
+      - "Front Right"
+      - "Front Center"
+      - "Rear Left"
+      - "Rear Right"
+      - "Rear Center"
+      - "Left"
+      - "Right"
+
+# =============================================================================
+# Sensor Types
+# =============================================================================
+sensor_types:
+  - "vis"      # Visible spectrum (day camera)
+  - "thermal"  # Thermal/infrared camera
+  - "day"      # Alias for vis
+  - "night"    # Alias for thermal
+
+# =============================================================================
+# Backup Configuration
+# =============================================================================
+backup:
+  # Local backup path on configurator host (use {hostname} placeholder)
+  local_path: "./backups/{hostname}/snapshots/{timestamp}"
+  # Timestamp format for backup directories
+  timestamp_format: "%Y%m%d_%H%M%S"
+  # Enable automatic backups before configuration changes
+  auto_backup: true
+
+# =============================================================================
+# Network Configuration
+# =============================================================================
+network:
+  # Default network subnet for device discovery
+  default_subnet: "192.168.1.0/24"
+  # Multicast configuration for video streams
+  multicast:
+    base_address: "239.1.1.1"
+    port_start: 5000
+
+# =============================================================================
+# Logging Configuration (for EdgeSA operations)
+# =============================================================================
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  # Log file for EdgeSA configuration operations
+  file:
+    enabled: true
+    path: "logs/edgesa_config.log"
+    max_size_mb: 5
+    backup_count: 3
+
+# =============================================================================
+# Validation Rules
+# =============================================================================
+validation:
+  # IP address validation regex
+  ip_pattern: "^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+  # Hostname validation regex
+  hostname_pattern: "^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\\.local$"
+  # Port range
+  port_min: 1
+  port_max: 65535
+  # Stream ID format (UUID)
+  stream_id_pattern: "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+
+# =============================================================================
+# Retry Configuration
+# =============================================================================
+retry:
+  # Maximum retry attempts for network operations
+  max_attempts: 4
+  # Exponential backoff base (in seconds)
+  backoff_base: 2
+  # Maximum backoff time (in seconds)
+  max_backoff: 16
