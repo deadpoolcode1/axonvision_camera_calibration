@@ -36,14 +36,14 @@ MOUNTING_POSITIONS = [
 VALID_3_1_POSITIONS = ["Front Center", "Rear Center"]
 
 # Camera type options - Internal values for storage
-CAMERA_TYPES = ["AI CENTRAL", "1:1", "3:1 (manager)", "3:1 (worker)"]
+CAMERA_TYPES = ["AI Central {manager}", "1:1 {worker}", "3:1 {manager}", "3:1 {worker}"]
 
 # Camera type display roles
 CAMERA_TYPE_ROLES = {
-    "AI CENTRAL": "(manager)",
-    "1:1": "(worker)",
-    "3:1 (manager)": "(manager)",
-    "3:1 (worker)": "(worker)",
+    "AI Central {manager}": "{manager}",
+    "1:1 {worker}": "{worker}",
+    "3:1 {manager}": "{manager}",
+    "3:1 {worker}": "{worker}",
 }
 
 
@@ -51,10 +51,10 @@ def get_camera_type_display(camera_type: str) -> str:
     """Get the display text for a camera type with its role.
 
     Args:
-        camera_type: The camera type value (e.g., "AI CENTRAL", "1:1")
+        camera_type: The camera type value (e.g., "AI Central {manager}", "1:1 {worker}")
 
     Returns:
-        Display string with role (e.g., "AI CENTRAL (manager)", "1:1 (worker)")
+        Display string with role (e.g., "AI Central {manager}", "1:1 {worker}")
     """
     role = CAMERA_TYPE_ROLES.get(camera_type, "")
     if camera_type.startswith("3:1"):
@@ -70,9 +70,9 @@ def get_camera_role(camera_type: str) -> str:
         camera_type: The camera type value
 
     Returns:
-        Role string: "(manager)" or "(worker)"
+        Role string: "{manager}" or "{worker}"
     """
-    return CAMERA_TYPE_ROLES.get(camera_type, "(worker)")
+    return CAMERA_TYPE_ROLES.get(camera_type, "{worker}")
 
 # Maximum limits
 MAX_CAMERAS = 6
@@ -89,7 +89,7 @@ PLATFORM_TYPES = ["Type A", "Type B", "Type C", "Custom"]
 class CameraDefinition:
     """Definition of a single camera in the system."""
     camera_number: int
-    camera_type: str = "1:1"  # AI CENTRAL, 1:1, 3:1 manager, or 3:1 worker
+    camera_type: str = "1:1 {worker}"  # AI Central {manager}, 1:1 {worker}, 3:1 {manager}, or 3:1 {worker}
     camera_model: str = "IMX219"
     mounting_position: str = "N/A"  # Default to N/A - must be set
     ip_address: str = "192.168.1.100"

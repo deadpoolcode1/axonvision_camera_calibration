@@ -647,9 +647,9 @@ class CameraTableWidget(QTableWidget):
         type_combo.addItems(CAMERA_TYPES)
         type_combo.setCurrentText(camera.camera_type)
         type_combo.setToolTip("Select camera type:\n"
-                               "  - AI CENTRAL (manager) - max 1 per platform\n"
-                               "  - 1:1 (worker) - standard camera\n"
-                               "  - 3:1 (manager/worker) - Front/Rear Center only")
+                               "  - AI Central {manager} - max 1 per platform\n"
+                               "  - 1:1 {worker} - standard camera\n"
+                               "  - 3:1 {manager}/{worker} - Front/Rear Center only")
         type_combo.currentTextChanged.connect(lambda text, r=row: self._on_type_changed(r, text))
         self.setCellWidget(row, 2, type_combo)
 
@@ -1180,10 +1180,10 @@ class PlatformConfigScreen(QWidget):
             return False, errors
 
         # Check AI Central count
-        ai_central_count = sum(1 for cam in cameras if cam['camera_type'] == 'AI CENTRAL')
+        ai_central_count = sum(1 for cam in cameras if cam['camera_type'] == 'AI Central {manager}')
         if ai_central_count > MAX_AI_CENTRAL_CAMERAS:
-            errors.append(f"Only {MAX_AI_CENTRAL_CAMERAS} AI CENTRAL camera allowed (found {ai_central_count}). "
-                         f"Change one camera type to '1:1' or '3:1'.")
+            errors.append(f"Only {MAX_AI_CENTRAL_CAMERAS} AI Central {{manager}} camera allowed (found {ai_central_count}). "
+                         f"Change one camera type to '1:1 {{worker}}' or '3:1'.")
 
         # Check 3:1 positions (both manager and worker)
         for i, cam in enumerate(cameras):

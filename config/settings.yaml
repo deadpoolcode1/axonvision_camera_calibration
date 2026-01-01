@@ -30,17 +30,17 @@ platform:
 # Camera types and their display formats
 camera_types:
   ai_central:
-    value: "AI CENTRAL"
-    display: "(manager)"
+    value: "AI Central {manager}"
+    display: "{manager}"
   one_to_one:
-    value: "1:1"
-    display: "(worker)"
+    value: "1:1 {worker}"
+    display: "{worker}"
   three_to_one_manager:
-    value: "3:1"
-    display: "(manager)"
+    value: "3:1 {manager}"
+    display: "{manager}"
   three_to_one_worker:
-    value: "3:1"
-    display: "(worker)"
+    value: "3:1 {worker}"
+    display: "{worker}"
 
 # Mounting positions
 mounting_positions:

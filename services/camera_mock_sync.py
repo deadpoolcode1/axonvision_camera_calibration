@@ -17,18 +17,18 @@ logger = logging.getLogger(__name__)
 
 # Type mappings from UI camera types to simulation device types
 CAMERA_TYPE_TO_DEVICE_TYPE = {
-    "1:1": "smartcluster",
-    "3:1 (worker)": "threecluster",
-    "3:1 (manager)": "threecluster",
-    "AI CENTRAL": "aicentral",
+    "1:1 {worker}": "smartcluster",
+    "3:1 {worker}": "threecluster",
+    "3:1 {manager}": "threecluster",
+    "AI Central {manager}": "aicentral",
 }
 
 # Mode mappings from UI camera types
 CAMERA_TYPE_TO_MODE = {
-    "1:1": "worker",
-    "3:1 (worker)": "worker",
-    "3:1 (manager)": "manager",
-    "AI CENTRAL": "manager",
+    "1:1 {worker}": "worker",
+    "3:1 {worker}": "worker",
+    "3:1 {manager}": "manager",
+    "AI Central {manager}": "manager",
 }
 
 
@@ -92,7 +92,7 @@ class CameraMockSyncService:
         Args:
             camera_data: Camera definition dict with keys:
                 - ip_address: Camera IP
-                - camera_type: "1:1", "3:1 (worker)", "3:1 (manager)", or "AI CENTRAL"
+                - camera_type: "1:1 {worker}", "3:1 {worker}", "3:1 {manager}", or "AI Central {manager}"
                 - camera_id: Unique camera identifier
                 - mounting_position: Position string
 
@@ -112,7 +112,7 @@ class CameraMockSyncService:
             logger.warning("Cannot create mock device: no IP address")
             return False
 
-        camera_type = camera_data.get("camera_type", "1:1")
+        camera_type = camera_data.get("camera_type", "1:1 {worker}")
         camera_id = camera_data.get("camera_id", "")
         position = camera_data.get("mounting_position")
 
