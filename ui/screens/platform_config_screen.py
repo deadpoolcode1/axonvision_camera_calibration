@@ -262,6 +262,8 @@ class CameraStreamWorker(QObject):
 class CameraPreviewWidget(QFrame):
     """Widget showing a single camera preview."""
 
+    close_requested = Signal()  # Emitted when user clicks the X button
+
     def __init__(self, camera_id: str, ip_address: str, parent=None):
         super().__init__(parent)
         self.camera_id = camera_id
@@ -296,11 +298,41 @@ class CameraPreviewWidget(QFrame):
         layout.setContentsMargins(5, 5, 5, 5)
         layout.setSpacing(3)
 
+        # Header row with camera ID and close button
+        header_layout = QHBoxLayout()
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(0)
+
         # Camera ID label
         self.id_label = QLabel(self.camera_id or "Camera")
-        self.id_label.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {COLORS['primary']};")
-        self.id_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.id_label)
+        self.id_label.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {COLORS['primary']}; border: none;")
+        self.id_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        header_layout.addWidget(self.id_label)
+
+        header_layout.addStretch()
+
+        # Close button (X)
+        self.close_btn = QPushButton("×")
+        self.close_btn.setFixedSize(20, 20)
+        self.close_btn.setCursor(Qt.PointingHandCursor)
+        self.close_btn.setToolTip("Remove from preview")
+        self.close_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: transparent;
+                border: none;
+                color: {COLORS['text_muted']};
+                font-size: 16px;
+                font-weight: bold;
+                padding: 0;
+            }}
+            QPushButton:hover {{
+                color: {COLORS['danger']};
+            }}
+        """)
+        self.close_btn.clicked.connect(self.close_requested.emit)
+        header_layout.addWidget(self.close_btn)
+
+        layout.addLayout(header_layout)
 
         # Video display
         self.video_label = QLabel()
@@ -943,6 +975,9 @@ class PlatformConfigScreen(QWidget):
         preview = CameraPreviewWidget(camera.camera_id, camera.ip_address)
         self.preview_widgets.append(preview)
 
+        # Connect close button signal to remove the camera
+        preview.close_requested.connect(lambda p=preview: self._on_preview_close_requested(p))
+
         # Calculate grid position (2 columns)
         index = len(self.preview_widgets) - 1
         row = index // 2
@@ -952,6 +987,12 @@ class PlatformConfigScreen(QWidget):
         # Start streaming for this preview if screen is visible
         if self.isVisible():
             preview.start_streaming()
+
+    def _on_preview_close_requested(self, preview: CameraPreviewWidget):
+        """Handle close button click from a camera preview widget."""
+        if preview in self.preview_widgets:
+            index = self.preview_widgets.index(preview)
+            self._on_camera_removed(index)
 
     def _remove_preview_at_index(self, index: int):
         """Remove a specific preview widget and rearrange remaining ones without stopping valid streams."""
@@ -1099,6 +1140,8 @@ class PlatformConfigScreen(QWidget):
         row, col = 0, 0
         for camera in self.config.cameras:
             preview = CameraPreviewWidget(camera.camera_id, camera.ip_address)
+            # Connect close button signal to remove the camera
+            preview.close_requested.connect(lambda p=preview: self._on_preview_close_requested(p))
             self.preview_widgets.append(preview)
             self.preview_grid.addWidget(preview, row, col)
 
