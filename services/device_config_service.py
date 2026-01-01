@@ -18,12 +18,84 @@ Usage:
     service.set_manager_connection("192.168.1.10", "192.168.1.30")
 """
 
+import json
 import logging
+import time
 from typing import Any, Dict, List, Optional, Tuple
 import requests
 from requests.exceptions import ConnectionError, Timeout, RequestException
 
 logger = logging.getLogger(__name__)
+
+# Enable debug logging for API calls
+DEBUG_API_CALLS = True
+
+
+def _log_request(method: str, url: str, headers: Dict, body: Any = None, device_ip: str = None):
+    """Log outgoing API request with full details (DEBUG level)."""
+    if not DEBUG_API_CALLS:
+        return
+
+    log_msg = f"\n{'='*70}\n"
+    log_msg += f"📤 OUTGOING REQUEST\n"
+    log_msg += f"{'='*70}\n"
+    log_msg += f"  Method:     {method}\n"
+    log_msg += f"  URL:        {url}\n"
+    if device_ip:
+        log_msg += f"  Target IP:  {device_ip}\n"
+    log_msg += f"  Headers:    {headers}\n"
+    if body:
+        try:
+            if isinstance(body, dict):
+                log_msg += f"  Body:\n{json.dumps(body, indent=4, default=str)}\n"
+            else:
+                log_msg += f"  Body: {body}\n"
+        except Exception:
+            log_msg += f"  Body: {body}\n"
+    log_msg += f"{'='*70}"
+    logger.debug(log_msg)
+
+
+def _log_response(response: requests.Response, duration_ms: float, device_ip: str = None):
+    """Log incoming API response with full details (DEBUG level)."""
+    if not DEBUG_API_CALLS:
+        return
+
+    log_msg = f"\n{'='*70}\n"
+    log_msg += f"📥 INCOMING RESPONSE\n"
+    log_msg += f"{'='*70}\n"
+    if device_ip:
+        log_msg += f"  Target IP:  {device_ip}\n"
+    log_msg += f"  Status:     {response.status_code} {response.reason}\n"
+    log_msg += f"  Duration:   {duration_ms:.2f}ms\n"
+
+    try:
+        resp_json = response.json()
+        log_msg += f"  Response Body:\n{json.dumps(resp_json, indent=4, default=str)}\n"
+    except Exception:
+        # Not JSON, show text
+        text = response.text[:500] if response.text else "(empty)"
+        log_msg += f"  Response Body: {text}\n"
+
+    log_msg += f"{'='*70}"
+    logger.debug(log_msg)
+
+
+def _log_error(method: str, url: str, error: Exception, device_ip: str = None):
+    """Log API request error (DEBUG level for details, ERROR for the error itself)."""
+    if not DEBUG_API_CALLS:
+        return
+
+    log_msg = f"\n{'='*70}\n"
+    log_msg += f"❌ REQUEST FAILED\n"
+    log_msg += f"{'='*70}\n"
+    log_msg += f"  Method:     {method}\n"
+    log_msg += f"  URL:        {url}\n"
+    if device_ip:
+        log_msg += f"  Target IP:  {device_ip}\n"
+    log_msg += f"  Error:      {type(error).__name__}: {error}\n"
+    log_msg += f"{'='*70}"
+    logger.debug(log_msg)
 
 
 class DeviceConfigService:
@@ -94,18 +166,28 @@ class DeviceConfigService:
         Returns:
             Tuple of (is_healthy, message)
         """
+        url = f"{self._get_discovery_url()}/v1/health"
+        headers = {"Content-Type": "application/json"}
+
         try:
-            url = f"{self._get_discovery_url()}/v1/health"
+            _log_request("GET", url, headers)
+            start_time = time.time()
             response = requests.get(url, timeout=5)
+            duration_ms = (time.time() - start_time) * 1000
+            _log_response(response, duration_ms)
+
             response.raise_for_status()
             data = response.json()
             status = data.get("status", "unknown")
             return status == "healthy", f"Discovery service status: {status}"
-        except ConnectionError:
+        except ConnectionError as e:
+            _log_error("GET", url, e)
             return False, "Discovery service not reachable"
-        except Timeout:
+        except Timeout as e:
+            _log_error("GET", url, e)
             return False, "Discovery service timeout"
         except Exception as e:
+            _log_error("GET", url, e)
             return False, f"Discovery service error: {e}"
 
     def discover_devices(self, timeout_ms: int = 5000) -> List[Dict[str, Any]]:
@@ -118,16 +200,24 @@ class DeviceConfigService:
         Returns:
             List of discovered devices
         """
+        url = f"{self._get_discovery_url()}/v1/discovery"
+        params = {"timeout_ms": timeout_ms}
+        headers = {"Content-Type": "application/json"}
+
         try:
-            url = f"{self._get_discovery_url()}/v1/discovery"
-            params = {"timeout_ms": timeout_ms}
+            _log_request("GET", f"{url}?timeout_ms={timeout_ms}", headers)
+            start_time = time.time()
             response = requests.get(url, params=params, timeout=timeout_ms / 1000 + 5)
+            duration_ms = (time.time() - start_time) * 1000
+            _log_response(response, duration_ms)
+
             response.raise_for_status()
             data = response.json()
             devices = data.get("devices", [])
             logger.info(f"Discovered {len(devices)} devices")
             return devices
         except Exception as e:
+            _log_error("GET", url, e)
             logger.error(f"Device discovery failed: {e}")
             raise
 
@@ -148,16 +238,24 @@ class DeviceConfigService:
         Returns:
             Provisioning results
         """
+        url = f"{self._get_discovery_url()}/v1/ssh-keys"
+        headers = {"Content-Type": "application/json"}
+        payload = {
+            "targets": [{"ip": ip} for ip in targets],
+            "credentials": {"username": username, "password": password}
+        }
+
         try:
-            url = f"{self._get_discovery_url()}/v1/ssh-keys"
-            payload = {
-                "targets": [{"ip": ip} for ip in targets],
-                "credentials": {"username": username, "password": password}
-            }
+            _log_request("POST", url, headers, payload)
+            start_time = time.time()
             response = requests.post(url, json=payload, timeout=30)
+            duration_ms = (time.time() - start_time) * 1000
+            _log_response(response, duration_ms)
+
             response.raise_for_status()
             return response.json()
         except Exception as e:
+            _log_error("POST", url, e)
             logger.error(f"SSH provisioning failed: {e}")
             raise
 
@@ -175,14 +273,21 @@ class DeviceConfigService:
         Returns:
             Mode information dict
         """
+        endpoint = self._config.device_api.get_endpoint("pipeline_mode")
+        url = self._get_device_url(device_ip, endpoint)
+        headers = self._get_headers(device_ip)
+
         try:
-            endpoint = self._config.device_api.get_endpoint("pipeline_mode")
-            url = self._get_device_url(device_ip, endpoint)
-            headers = self._get_headers(device_ip)
+            _log_request("GET", url, headers, device_ip=device_ip)
+            start_time = time.time()
             response = requests.get(url, headers=headers, timeout=self._timeout)
+            duration_ms = (time.time() - start_time) * 1000
+            _log_response(response, duration_ms, device_ip=device_ip)
+
             response.raise_for_status()
             return response.json()
         except Exception as e:
+            _log_error("GET", url, e, device_ip=device_ip)
             logger.error(f"Get pipeline mode failed for {device_ip}: {e}")
             raise
 
@@ -197,17 +302,24 @@ class DeviceConfigService:
         Returns:
             Result dict
         """
+        endpoint = self._config.device_api.get_endpoint("pipeline_mode")
+        url = self._get_device_url(device_ip, endpoint)
+        headers = self._get_headers(device_ip)
+        payload = {"mode": mode}
+
         try:
-            endpoint = self._config.device_api.get_endpoint("pipeline_mode")
-            url = self._get_device_url(device_ip, endpoint)
-            headers = self._get_headers(device_ip)
-            payload = {"mode": mode}
+            _log_request("POST", url, headers, payload, device_ip=device_ip)
+            start_time = time.time()
             response = requests.post(url, json=payload, headers=headers, timeout=self._timeout)
+            duration_ms = (time.time() - start_time) * 1000
+            _log_response(response, duration_ms, device_ip=device_ip)
+
             response.raise_for_status()
             result = response.json()
             logger.info(f"Set pipeline mode for {device_ip}: {mode}")
             return result
         except Exception as e:
+            _log_error("POST", url, e, device_ip=device_ip)
             logger.error(f"Set pipeline mode failed for {device_ip}: {e}")
             raise
 
@@ -225,14 +337,21 @@ class DeviceConfigService:
         Returns:
             Manager connection info
         """
+        endpoint = self._config.device_api.get_endpoint("manager_connection")
+        url = self._get_device_url(device_ip, endpoint)
+        headers = self._get_headers(device_ip)
+
         try:
-            endpoint = self._config.device_api.get_endpoint("manager_connection")
-            url = self._get_device_url(device_ip, endpoint)
-            headers = self._get_headers(device_ip)
+            _log_request("GET", url, headers, device_ip=device_ip)
+            start_time = time.time()
             response = requests.get(url, headers=headers, timeout=self._timeout)
+            duration_ms = (time.time() - start_time) * 1000
+            _log_response(response, duration_ms, device_ip=device_ip)
+
             response.raise_for_status()
             return response.json()
         except Exception as e:
+            _log_error("GET", url, e, device_ip=device_ip)
             logger.error(f"Get manager connection failed for {device_ip}: {e}")
             raise
 
@@ -247,17 +366,24 @@ class DeviceConfigService:
         Returns:
             Result dict
         """
+        endpoint = self._config.device_api.get_endpoint("manager_connection")
+        url = self._get_device_url(device_ip, endpoint)
+        headers = self._get_headers(device_ip)
+        payload = {"manager_ip": manager_ip}
+
         try:
-            endpoint = self._config.device_api.get_endpoint("manager_connection")
-            url = self._get_device_url(device_ip, endpoint)
-            headers = self._get_headers(device_ip)
-            payload = {"manager_ip": manager_ip}
+            _log_request("POST", url, headers, payload, device_ip=device_ip)
+            start_time = time.time()
             response = requests.post(url, json=payload, headers=headers, timeout=self._timeout)
+            duration_ms = (time.time() - start_time) * 1000
+            _log_response(response, duration_ms, device_ip=device_ip)
+
             response.raise_for_status()
             result = response.json()
             logger.info(f"Set manager connection for {device_ip}: {manager_ip}")
             return result
         except Exception as e:
+            _log_error("POST", url, e, device_ip=device_ip)
             logger.error(f"Set manager connection failed for {device_ip}: {e}")
             raise
 
@@ -275,14 +401,21 @@ class DeviceConfigService:
         Returns:
             Sensors configuration
         """
+        endpoint = self._config.device_api.get_endpoint("sensors_config")
+        url = self._get_device_url(device_ip, endpoint)
+        headers = self._get_headers(device_ip)
+
         try:
-            endpoint = self._config.device_api.get_endpoint("sensors_config")
-            url = self._get_device_url(device_ip, endpoint)
-            headers = self._get_headers(device_ip)
+            _log_request("GET", url, headers, device_ip=device_ip)
+            start_time = time.time()
             response = requests.get(url, headers=headers, timeout=self._timeout)
+            duration_ms = (time.time() - start_time) * 1000
+            _log_response(response, duration_ms, device_ip=device_ip)
+
             response.raise_for_status()
             return response.json()
         except Exception as e:
+            _log_error("GET", url, e, device_ip=device_ip)
             logger.error(f"Get sensors config failed for {device_ip}: {e}")
             raise
 
@@ -301,16 +434,23 @@ class DeviceConfigService:
         Returns:
             Result dict
         """
+        endpoint = self._config.device_api.get_endpoint("sensors_config")
+        url = self._get_device_url(device_ip, endpoint)
+        headers = self._get_headers(device_ip)
+
         try:
-            endpoint = self._config.device_api.get_endpoint("sensors_config")
-            url = self._get_device_url(device_ip, endpoint)
-            headers = self._get_headers(device_ip)
+            _log_request("POST", url, headers, sensors_config, device_ip=device_ip)
+            start_time = time.time()
             response = requests.post(url, json=sensors_config, headers=headers, timeout=self._timeout)
+            duration_ms = (time.time() - start_time) * 1000
+            _log_response(response, duration_ms, device_ip=device_ip)
+
             response.raise_for_status()
             result = response.json()
             logger.info(f"Set sensors config for {device_ip}: {len(sensors_config)} sensors")
             return result
         except Exception as e:
+            _log_error("POST", url, e, device_ip=device_ip)
             logger.error(f"Set sensors config failed for {device_ip}: {e}")
             raise
 
@@ -324,14 +464,21 @@ class DeviceConfigService:
         Returns:
             Sensor URL map
         """
+        endpoint = self._config.device_api.get_endpoint("all_sensor_urls")
+        url = self._get_device_url(device_ip, endpoint)
+        headers = self._get_headers(device_ip)
+
         try:
-            endpoint = self._config.device_api.get_endpoint("all_sensor_urls")
-            url = self._get_device_url(device_ip, endpoint)
-            headers = self._get_headers(device_ip)
+            _log_request("GET", url, headers, device_ip=device_ip)
+            start_time = time.time()
             response = requests.get(url, headers=headers, timeout=self._timeout)
+            duration_ms = (time.time() - start_time) * 1000
+            _log_response(response, duration_ms, device_ip=device_ip)
+
             response.raise_for_status()
             return response.json()
         except Exception as e:
+            _log_error("GET", url, e, device_ip=device_ip)
             logger.error(f"Get sensor URLs failed for {device_ip}: {e}")
             raise
 
@@ -350,15 +497,22 @@ class DeviceConfigService:
         Returns:
             Stream ID string
         """
+        endpoint = self._config.device_api.get_endpoint("streams", slot=slot)
+        url = self._get_device_url(device_ip, endpoint)
+        headers = self._get_headers(device_ip)
+
         try:
-            endpoint = self._config.device_api.get_endpoint("streams", slot=slot)
-            url = self._get_device_url(device_ip, endpoint)
-            headers = self._get_headers(device_ip)
+            _log_request("GET", url, headers, device_ip=device_ip)
+            start_time = time.time()
             response = requests.get(url, headers=headers, timeout=self._timeout)
+            duration_ms = (time.time() - start_time) * 1000
+            _log_response(response, duration_ms, device_ip=device_ip)
+
             response.raise_for_status()
             data = response.json()
             return data.get("stream_id", "")
         except Exception as e:
+            _log_error("GET", url, e, device_ip=device_ip)
             logger.error(f"Get stream ID failed for {device_ip} slot {slot}: {e}")
             raise
 
@@ -377,17 +531,24 @@ class DeviceConfigService:
         Returns:
             Result dict
         """
+        endpoint = self._config.device_api.get_endpoint("position")
+        url = self._get_device_url(device_ip, endpoint)
+        headers = self._get_headers(device_ip)
+        payload = {"position": position}
+
         try:
-            endpoint = self._config.device_api.get_endpoint("position")
-            url = self._get_device_url(device_ip, endpoint)
-            headers = self._get_headers(device_ip)
-            payload = {"position": position}
+            _log_request("POST", url, headers, payload, device_ip=device_ip)
+            start_time = time.time()
             response = requests.post(url, json=payload, headers=headers, timeout=self._timeout)
+            duration_ms = (time.time() - start_time) * 1000
+            _log_response(response, duration_ms, device_ip=device_ip)
+
             response.raise_for_status()
             result = response.json()
             logger.info(f"Set position for {device_ip}: {position}")
             return result
         except Exception as e:
+            _log_error("POST", url, e, device_ip=device_ip)
             logger.error(f"Set position failed for {device_ip}: {e}")
             raise
 
@@ -405,20 +566,29 @@ class DeviceConfigService:
         Returns:
             Tuple of (is_healthy, message)
         """
+        endpoint = self._config.device_api.get_endpoint("health")
+        url = self._get_device_url(device_ip, endpoint)
+        headers = self._get_headers(device_ip)
+
         try:
-            endpoint = self._config.device_api.get_endpoint("health")
-            url = self._get_device_url(device_ip, endpoint)
-            headers = self._get_headers(device_ip)
+            _log_request("GET", url, headers, device_ip=device_ip)
+            start_time = time.time()
             response = requests.get(url, headers=headers, timeout=5)
+            duration_ms = (time.time() - start_time) * 1000
+            _log_response(response, duration_ms, device_ip=device_ip)
+
             response.raise_for_status()
             data = response.json()
             status = data.get("status", "unknown")
             return status == "healthy", f"Device {device_ip}: {status}"
-        except ConnectionError:
+        except ConnectionError as e:
+            _log_error("GET", url, e, device_ip=device_ip)
             return False, f"Device {device_ip} not reachable"
-        except Timeout:
+        except Timeout as e:
+            _log_error("GET", url, e, device_ip=device_ip)
             return False, f"Device {device_ip} timeout"
         except Exception as e:
+            _log_error("GET", url, e, device_ip=device_ip)
             return False, f"Device {device_ip} error: {e}"
 
     # =========================================================================
@@ -446,15 +616,22 @@ class DeviceConfigService:
             True if successful
         """
         if self._simulation_mode:
+            url = f"{self._mock_server.device_api_url}/sftp/write"
+            headers = self._get_headers(device_ip)
+            payload = {"path": remote_path, "content": content}
+
             try:
-                url = f"{self._mock_server.device_api_url}/sftp/write"
-                headers = self._get_headers(device_ip)
-                payload = {"path": remote_path, "content": content}
+                _log_request("POST", url, headers, {"path": remote_path, "content": f"<{len(content)} bytes>"}, device_ip=device_ip)
+                start_time = time.time()
                 response = requests.post(url, json=payload, headers=headers, timeout=self._timeout)
+                duration_ms = (time.time() - start_time) * 1000
+                _log_response(response, duration_ms, device_ip=device_ip)
+
                 response.raise_for_status()
                 logger.info(f"Wrote file to {device_ip}:{remote_path}")
                 return True
             except Exception as e:
+                _log_error("POST", url, e, device_ip=device_ip)
                 logger.error(f"Write file failed for {device_ip}:{remote_path}: {e}")
                 return False
         else:
@@ -481,15 +658,22 @@ class DeviceConfigService:
             File content or None if failed
         """
         if self._simulation_mode:
+            url = f"{self._mock_server.device_api_url}/sftp/read"
+            headers = self._get_headers(device_ip)
+            params = {"path": remote_path}
+
             try:
-                url = f"{self._mock_server.device_api_url}/sftp/read"
-                headers = self._get_headers(device_ip)
-                params = {"path": remote_path}
+                _log_request("GET", f"{url}?path={remote_path}", headers, device_ip=device_ip)
+                start_time = time.time()
                 response = requests.get(url, params=params, headers=headers, timeout=self._timeout)
+                duration_ms = (time.time() - start_time) * 1000
+                _log_response(response, duration_ms, device_ip=device_ip)
+
                 response.raise_for_status()
                 data = response.json()
                 return data.get("content")
             except Exception as e:
+                _log_error("GET", url, e, device_ip=device_ip)
                 logger.error(f"Read file failed for {device_ip}:{remote_path}: {e}")
                 return None
         else:

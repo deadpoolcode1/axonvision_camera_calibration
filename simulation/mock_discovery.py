@@ -229,6 +229,15 @@ async def discover_devices(
     request_id = str(uuid.uuid4())
     start_time = time.time()
 
+    logger.debug(f"\n{'='*60}")
+    logger.debug(f"🔍 DISCOVERY ENDPOINT - Processing request")
+    logger.debug(f"{'='*60}")
+    logger.debug(f"  Request ID:   {request_id}")
+    logger.debug(f"  Timeout:      {timeout_ms}ms")
+    logger.debug(f"  IP Subnet:    {ip_subnet or 'all'}")
+    logger.debug(f"  IP Range:     {ip_range_start} - {ip_range_end}" if ip_range_start else "  IP Range:     N/A")
+    logger.debug(f"  Include TXT:  {include_txt}")
+
     if state_manager is None:
         raise HTTPException(status_code=503, detail="State manager not initialized")
 
@@ -286,7 +295,11 @@ async def discover_devices(
 
     scan_time_ms = int((time.time() - start_time) * 1000)
 
-    logger.info(f"Discovery scan completed: {len(devices)} devices found in {scan_time_ms}ms")
+    logger.debug(f"\n  📋 Returning {len(devices)} devices:")
+    for dev in devices:
+        logger.debug(f"    - {dev.id} ({dev.deviceType}) @ {dev.ipAddress}")
+    logger.debug(f"  Scan completed in {scan_time_ms}ms")
+    logger.debug(f"{'='*60}\n")
 
     return DiscoveryResponse(
         requestId=request_id,
@@ -311,6 +324,13 @@ async def provision_ssh_keys(request: SSHKeysRequest):
     - Verification
     """
     request_id = str(uuid.uuid4())
+
+    logger.debug(f"\n{'='*60}")
+    logger.debug(f"🔑 SSH KEYS ENDPOINT - Processing provisioning request")
+    logger.debug(f"{'='*60}")
+    logger.debug(f"  Request ID:   {request_id}")
+    logger.debug(f"  Targets:      {[t.ip for t in request.targets]}")
+    logger.debug(f"  Username:     {request.credentials.username if request.credentials else 'nvidia'}")
 
     if state_manager is None:
         raise HTTPException(status_code=503, detail="State manager not initialized")
@@ -419,7 +439,15 @@ async def provision_ssh_keys(request: SSHKeysRequest):
         failed=failed
     )
 
-    logger.info(f"SSH provisioning: {key_installed} installed, {already_configured} existing, {failed} failed")
+    logger.debug(f"\n  📋 SSH Provisioning Summary:")
+    logger.debug(f"    - Total targets:      {len(request.targets)}")
+    logger.debug(f"    - Keys installed:     {key_installed}")
+    logger.debug(f"    - Already configured: {already_configured}")
+    logger.debug(f"    - Failed:             {failed}")
+    for r in results:
+        status_emoji = "✅" if r.status == "key_installed" else ("🔄" if r.status == "already_configured" else "❌")
+        logger.debug(f"    {status_emoji} {r.target}: {r.status}")
+    logger.debug(f"{'='*60}\n")
 
     return SSHKeysResponse(
         requestId=request_id,
