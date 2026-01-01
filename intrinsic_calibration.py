@@ -706,9 +706,10 @@ class CoverageAnalyzer:
     Analyzes calibration image coverage to provide capture guidance.
 
     Tracks:
-    - Position coverage: center, left, right, top, bottom
+    - Position coverage: center, left, right, top, bottom, and corners (top-left, etc.)
     - Tilt coverage: level, tilted-left, tilted-right, tilted-up, tilted-down
     - Scale coverage: close, medium, far
+    - FOV grid coverage: 3x3 grid for precise FOV coverage percentage
     """
 
     # Region thresholds (normalized 0-1 coordinates)
@@ -716,9 +717,18 @@ class CoverageAnalyzer:
     TILT_THRESHOLD = 0.15  # Aspect ratio deviation to consider tilted
 
     # Coverage tracking
-    POSITIONS = ['center', 'left', 'right', 'top', 'bottom']
+    POSITIONS = ['center', 'left', 'right', 'top', 'bottom',
+                 'top_left', 'top_right', 'bottom_left', 'bottom_right']
     TILTS = ['level', 'tilted_left', 'tilted_right', 'tilted_up', 'tilted_down']
     SCALES = ['close', 'medium', 'far']
+
+    # FOV grid for coverage percentage (3x3)
+    FOV_GRID_SIZE = 3
+
+    # Minimum thresholds for good calibration
+    MIN_FOV_COVERAGE_PERCENT = 60.0  # Minimum 60% FOV coverage
+    MIN_VIEWPOINT_DIVERSITY = 3  # At least 3 different scale/tilt combinations
+    MIN_IMAGES_PER_REGION = 1  # At least 1 image in each FOV region for good coverage
 
     def __init__(self):
         # Track coverage counts for each category
@@ -728,7 +738,17 @@ class CoverageAnalyzer:
         self.total_captures = 0
         self.image_size: Optional[Tuple[int, int]] = None
 
-    def analyze_detection(self, corners: np.ndarray, image_size: Tuple[int, int]) -> Dict[str, str]:
+        # FOV grid coverage tracking (3x3 grid = 9 cells)
+        self.fov_grid = [[0 for _ in range(self.FOV_GRID_SIZE)]
+                         for _ in range(self.FOV_GRID_SIZE)]
+
+        # Store all corner positions for detailed analysis
+        self.all_corner_positions: List[List[Tuple[float, float]]] = []
+
+        # Track unique viewpoints (scale + tilt combinations)
+        self.viewpoints: List[Tuple[str, str]] = []
+
+    def analyze_detection(self, corners: np.ndarray, image_size: Tuple[int, int]) -> Dict[str, Any]:
         """
         Analyze a detection and return its characteristics.
 
@@ -737,7 +757,7 @@ class CoverageAnalyzer:
             image_size: (width, height) of image
 
         Returns:
-            Dict with 'position', 'tilt', and 'scale' classifications
+            Dict with 'position', 'tilt', 'scale', 'fov_cells', and normalized corner positions
         """
         self.image_size = image_size
         width, height = image_size
@@ -753,7 +773,7 @@ class CoverageAnalyzer:
         norm_x = centroid_x / width
         norm_y = centroid_y / height
 
-        # Determine position
+        # Determine position (including corners now)
         position = self._classify_position(norm_x, norm_y)
 
         # Calculate bounding box for tilt and scale analysis
@@ -768,7 +788,21 @@ class CoverageAnalyzer:
         # Determine scale from bounding box area relative to image
         scale = self._classify_scale(bbox_width, bbox_height, width, height)
 
-        return {'position': position, 'tilt': tilt, 'scale': scale}
+        # Calculate which FOV grid cells this detection covers
+        fov_cells = self._get_fov_cells(pts, width, height)
+
+        # Store normalized corner positions for coverage analysis
+        norm_corners = [(p[0] / width, p[1] / height) for p in pts]
+
+        return {
+            'position': position,
+            'tilt': tilt,
+            'scale': scale,
+            'fov_cells': fov_cells,
+            'normalized_corners': norm_corners,
+            'centroid': (norm_x, norm_y),
+            'bbox_coverage': (bbox_width * bbox_height) / (width * height)
+        }
 
     def add_detection(self, corners: np.ndarray, image_size: Tuple[int, int]):
         """Add a detection and update coverage tracking."""
@@ -779,24 +813,70 @@ class CoverageAnalyzer:
         self.scale_counts[analysis['scale']] += 1
         self.total_captures += 1
 
+        # Update FOV grid coverage
+        for row, col in analysis['fov_cells']:
+            self.fov_grid[row][col] += 1
+
+        # Store corner positions for detailed analysis
+        self.all_corner_positions.append(analysis['normalized_corners'])
+
+        # Track viewpoint diversity (unique scale + tilt combinations)
+        viewpoint = (analysis['scale'], analysis['tilt'])
+        if viewpoint not in self.viewpoints:
+            self.viewpoints.append(viewpoint)
+
         return analysis
 
-    def _classify_position(self, norm_x: float, norm_y: float) -> str:
-        """Classify position based on normalized centroid."""
-        # Check if clearly in a corner/edge region
-        if norm_x < 0.5 - self.POSITION_THRESHOLD:
-            if abs(norm_y - 0.5) < self.POSITION_THRESHOLD:
-                return 'left'
-        elif norm_x > 0.5 + self.POSITION_THRESHOLD:
-            if abs(norm_y - 0.5) < self.POSITION_THRESHOLD:
-                return 'right'
+    def _get_fov_cells(self, pts: np.ndarray, width: int, height: int) -> List[Tuple[int, int]]:
+        """
+        Determine which FOV grid cells are covered by the detected corners.
 
-        if norm_y < 0.5 - self.POSITION_THRESHOLD:
-            if abs(norm_x - 0.5) < self.POSITION_THRESHOLD:
-                return 'top'
-        elif norm_y > 0.5 + self.POSITION_THRESHOLD:
-            if abs(norm_x - 0.5) < self.POSITION_THRESHOLD:
-                return 'bottom'
+        Args:
+            pts: Corner points (N, 2)
+            width: Image width
+            height: Image height
+
+        Returns:
+            List of (row, col) tuples for covered grid cells
+        """
+        cells = set()
+        cell_width = width / self.FOV_GRID_SIZE
+        cell_height = height / self.FOV_GRID_SIZE
+
+        for pt in pts:
+            col = min(int(pt[0] / cell_width), self.FOV_GRID_SIZE - 1)
+            row = min(int(pt[1] / cell_height), self.FOV_GRID_SIZE - 1)
+            cells.add((row, col))
+
+        return list(cells)
+
+    def _classify_position(self, norm_x: float, norm_y: float) -> str:
+        """Classify position based on normalized centroid, including corners."""
+        # Define regions
+        is_left = norm_x < 0.5 - self.POSITION_THRESHOLD
+        is_right = norm_x > 0.5 + self.POSITION_THRESHOLD
+        is_top = norm_y < 0.5 - self.POSITION_THRESHOLD
+        is_bottom = norm_y > 0.5 + self.POSITION_THRESHOLD
+
+        # Check corners first
+        if is_left and is_top:
+            return 'top_left'
+        if is_right and is_top:
+            return 'top_right'
+        if is_left and is_bottom:
+            return 'bottom_left'
+        if is_right and is_bottom:
+            return 'bottom_right'
+
+        # Check edges
+        if is_left:
+            return 'left'
+        if is_right:
+            return 'right'
+        if is_top:
+            return 'top'
+        if is_bottom:
+            return 'bottom'
 
         return 'center'
 
@@ -860,44 +940,140 @@ class CoverageAnalyzer:
         else:
             return 'far'
 
-    def get_coverage_summary(self) -> Dict[str, Dict[str, int]]:
-        """Get summary of all coverage counts."""
+    def get_fov_coverage_percent(self) -> float:
+        """
+        Calculate the FOV coverage percentage based on the 3x3 grid.
+
+        Returns:
+            Percentage of FOV covered (0-100)
+        """
+        total_cells = self.FOV_GRID_SIZE * self.FOV_GRID_SIZE
+        covered_cells = sum(1 for row in self.fov_grid for cell in row if cell > 0)
+        return (covered_cells / total_cells) * 100.0
+
+    def get_viewpoint_diversity(self) -> int:
+        """
+        Get the number of unique viewpoints (scale + tilt combinations).
+
+        Returns:
+            Number of unique viewpoints captured
+        """
+        return len(self.viewpoints)
+
+    def get_uncovered_fov_regions(self) -> List[str]:
+        """
+        Get list of FOV regions that need coverage.
+
+        Returns:
+            List of region descriptions (e.g., "upper-left", "center")
+        """
+        region_names = [
+            ['upper-left', 'upper-center', 'upper-right'],
+            ['middle-left', 'center', 'middle-right'],
+            ['lower-left', 'lower-center', 'lower-right']
+        ]
+
+        uncovered = []
+        for row in range(self.FOV_GRID_SIZE):
+            for col in range(self.FOV_GRID_SIZE):
+                if self.fov_grid[row][col] == 0:
+                    uncovered.append(region_names[row][col])
+
+        return uncovered
+
+    def get_coverage_summary(self) -> Dict[str, Any]:
+        """Get comprehensive summary of all coverage counts and metrics."""
         return {
             'positions': self.position_counts.copy(),
             'tilts': self.tilt_counts.copy(),
             'scales': self.scale_counts.copy(),
-            'total': self.total_captures
+            'total': self.total_captures,
+            'fov_coverage_percent': self.get_fov_coverage_percent(),
+            'viewpoint_diversity': self.get_viewpoint_diversity(),
+            'fov_grid': [row[:] for row in self.fov_grid],  # Deep copy
+            'uncovered_regions': self.get_uncovered_fov_regions()
+        }
+
+    def get_calibration_readiness(self) -> Dict[str, Any]:
+        """
+        Assess whether the current coverage is sufficient for good calibration.
+
+        Returns:
+            Dict with 'ready' boolean and detailed status/recommendations
+        """
+        fov_coverage = self.get_fov_coverage_percent()
+        viewpoint_diversity = self.get_viewpoint_diversity()
+
+        issues = []
+        warnings = []
+
+        # Check FOV coverage
+        if fov_coverage < self.MIN_FOV_COVERAGE_PERCENT:
+            issues.append(
+                f"Insufficient FOV coverage ({fov_coverage:.0f}% < {self.MIN_FOV_COVERAGE_PERCENT:.0f}%)"
+            )
+
+        # Check viewpoint diversity
+        if viewpoint_diversity < self.MIN_VIEWPOINT_DIVERSITY:
+            issues.append(
+                f"Limited viewpoint diversity ({viewpoint_diversity} < {self.MIN_VIEWPOINT_DIVERSITY} required)"
+            )
+
+        # Check corner coverage (important for distortion estimation)
+        corner_positions = ['top_left', 'top_right', 'bottom_left', 'bottom_right']
+        corners_covered = sum(1 for pos in corner_positions if self.position_counts.get(pos, 0) > 0)
+        if corners_covered < 2:
+            warnings.append("Corners need more coverage for accurate distortion estimation")
+
+        # Check scale diversity
+        scales_covered = sum(1 for scale in self.SCALES if self.scale_counts.get(scale, 0) > 0)
+        if scales_covered < 2:
+            warnings.append("Capture at different distances for better focal length estimation")
+
+        return {
+            'ready': len(issues) == 0,
+            'fov_coverage_percent': fov_coverage,
+            'viewpoint_diversity': viewpoint_diversity,
+            'issues': issues,
+            'warnings': warnings
         }
 
     def get_missing_coverage(self, min_count: int = 1) -> List[str]:
         """
-        Get list of coverage areas that need more captures.
+        Get prioritized list of coverage areas that need more captures.
 
         Args:
             min_count: Minimum captures needed for each category
 
         Returns:
-            List of suggestions for what to capture next
+            List of suggestions for what to capture next (prioritized)
         """
         missing = []
 
-        # Check positions
+        # Priority 1: Uncovered FOV regions (especially corners)
+        uncovered = self.get_uncovered_fov_regions()
+        corner_uncovered = [r for r in uncovered if 'left' in r or 'right' in r]
+        if corner_uncovered:
+            # Suggest the first uncovered corner/edge
+            region = corner_uncovered[0].replace('-', ' ').replace('upper', 'top').replace('lower', 'bottom')
+            missing.append(f"Move target to {region} corner")
+
+        # Priority 2: Check positions
         for pos in self.POSITIONS:
             if self.position_counts[pos] < min_count:
-                missing.append(f"board in {pos.upper()} of frame")
+                pos_display = pos.replace('_', '-')
+                missing.append(f"board in {pos_display.upper()} of frame")
 
-        # Check tilts (only require some tilt coverage, not all types)
+        # Priority 3: Check tilts (only require some tilt coverage)
         has_any_tilt = any(self.tilt_counts[t] > 0 for t in self.TILTS if t != 'level')
         if not has_any_tilt and self.total_captures >= 5:
-            missing.append("board TILTED at an angle")
+            missing.append("Tilt target slightly left or right")
 
-        # Check scales
-        for scale in self.SCALES:
-            if self.scale_counts[scale] < min_count:
-                if scale == 'close':
-                    missing.append("board CLOSER to camera")
-                elif scale == 'far':
-                    missing.append("board FARTHER from camera")
+        # Priority 4: Check scales
+        if self.scale_counts.get('far', 0) < min_count:
+            missing.append("Increase distance (step back)")
+        if self.scale_counts.get('close', 0) < min_count:
+            missing.append("Decrease distance (step closer)")
 
         return missing
 
@@ -906,11 +1082,22 @@ class CoverageAnalyzer:
         Get a human-readable guidance message for the user.
 
         Returns:
-            Guidance string or empty string if coverage is adequate
+            Guidance string with specific action
         """
-        if self.total_captures < 3:
-            return ""  # Don't give guidance until we have a few captures
+        fov_coverage = self.get_fov_coverage_percent()
 
+        if self.total_captures < 2:
+            return "Start by capturing the target in the center of the frame"
+
+        if self.total_captures < 5:
+            # Early guidance - focus on basics
+            uncovered = self.get_uncovered_fov_regions()
+            if uncovered:
+                region = uncovered[0].replace('-', ' ')
+                return f"Move target to {region}"
+            return "Continue capturing at different positions"
+
+        # Check for critical missing areas
         missing = self.get_missing_coverage(min_count=1)
 
         if not missing:
@@ -918,42 +1105,56 @@ class CoverageAnalyzer:
             max_pos = max(self.position_counts.values())
             min_pos = min(self.position_counts.values())
             if max_pos > min_pos + 3:
-                # Find underrepresented positions
                 under_positions = [p for p, c in self.position_counts.items() if c < max_pos - 2]
                 if under_positions:
-                    return f"Try: {under_positions[0].upper()} of frame"
+                    pos = under_positions[0].replace('_', ' ')
+                    return f"Try: {pos.upper()} of frame"
             return ""  # Good coverage!
 
         # Return the first missing item as suggestion
-        return f"Try: {missing[0]}"
+        return missing[0]
 
     def get_detailed_guidance(self) -> str:
         """
         Get detailed multi-line guidance for calibration.
 
         Returns:
-            Multi-line guidance string
+            Multi-line guidance string with coverage status
         """
         lines = []
+        fov_coverage = self.get_fov_coverage_percent()
+        viewpoint_diversity = self.get_viewpoint_diversity()
 
         if self.total_captures < 3:
-            lines.append("Capture more images to get guidance")
+            lines.append("Capture more images to get detailed guidance")
+            lines.append(f"Current FOV coverage: {fov_coverage:.0f}%")
             return "\n".join(lines)
+
+        # FOV coverage status
+        if fov_coverage >= self.MIN_FOV_COVERAGE_PERCENT:
+            lines.append(f"FOV Coverage: {fov_coverage:.0f}% (Good)")
+        else:
+            lines.append(f"FOV Coverage: {fov_coverage:.0f}% (Need {self.MIN_FOV_COVERAGE_PERCENT:.0f}%+)")
+
+        # Viewpoint diversity status
+        if viewpoint_diversity >= self.MIN_VIEWPOINT_DIVERSITY:
+            lines.append(f"Viewpoint Diversity: {viewpoint_diversity} (Good)")
+        else:
+            lines.append(f"Viewpoint Diversity: {viewpoint_diversity} (Need {self.MIN_VIEWPOINT_DIVERSITY}+)")
 
         missing = self.get_missing_coverage(min_count=1)
 
         if not missing:
-            lines.append("Good coverage so far!")
+            lines.append("\nGood coverage! Ready for calibration.")
 
             # Suggest more variety if we have many captures
             if self.total_captures >= 10:
-                # Find least covered areas
                 min_pos_count = min(self.position_counts.values())
-                weak_positions = [p for p, c in self.position_counts.items() if c == min_pos_count]
+                weak_positions = [p.replace('_', ' ') for p, c in self.position_counts.items() if c == min_pos_count]
                 if weak_positions and min_pos_count < 3:
-                    lines.append(f"Could use more: {', '.join(weak_positions)}")
+                    lines.append(f"Could use more: {', '.join(weak_positions[:2])}")
         else:
-            lines.append("Suggested next captures:")
+            lines.append("\nSuggested next captures:")
             for item in missing[:3]:  # Show top 3 suggestions
                 lines.append(f"  • {item}")
 
