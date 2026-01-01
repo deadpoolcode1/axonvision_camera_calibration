@@ -234,7 +234,7 @@ retry:
 # instead of real device APIs. Video streams still come from real cameras.
 simulation:
   # Enable simulation mode (set to true when real devices are not available)
-  enabled: false
+  enabled: true
 
   # Mock server configuration
   mock_server:
