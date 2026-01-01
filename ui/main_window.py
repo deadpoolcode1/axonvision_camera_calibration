@@ -10,13 +10,14 @@ from pathlib import Path
 
 from PySide6.QtWidgets import (
     QMainWindow, QStackedWidget, QWidget, QVBoxLayout, QHBoxLayout,
-    QMessageBox, QPushButton, QMenu
+    QMessageBox, QPushButton, QMenu, QLabel, QFrame
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
 
 from . import __version__
 from .styles import MAIN_STYLESHEET
+from config import edgesa_config
 from .data_models import (
     CalibrationDataStore, CalibrationSession, PlatformConfiguration
 )
@@ -104,6 +105,9 @@ class MainWindow(QMainWindow):
 
         layout.addLayout(menu_bar)
 
+        # Simulation mode banner (shown when simulation is enabled)
+        self._setup_simulation_banner(layout)
+
         self.screen_stack = QStackedWidget()
         layout.addWidget(self.screen_stack)
 
@@ -126,6 +130,72 @@ class MainWindow(QMainWindow):
 
         # Start on login screen
         self.screen_stack.setCurrentIndex(0)
+
+    def _setup_simulation_banner(self, layout: QVBoxLayout):
+        """Setup the simulation mode warning banner."""
+        if not edgesa_config.simulation.enabled:
+            return
+
+        # Create banner frame
+        self.simulation_banner = QFrame()
+        self.simulation_banner.setObjectName("simulationBanner")
+        self.simulation_banner.setStyleSheet("""
+            QFrame#simulationBanner {
+                background-color: #fff3cd;
+                border: 2px solid #ffc107;
+                border-radius: 6px;
+                padding: 8px;
+                margin: 5px 10px;
+            }
+        """)
+
+        banner_layout = QHBoxLayout(self.simulation_banner)
+        banner_layout.setContentsMargins(15, 8, 15, 8)
+
+        # Warning icon
+        icon_label = QLabel("⚠")
+        icon_label.setStyleSheet("font-size: 20px; color: #856404;")
+        banner_layout.addWidget(icon_label)
+
+        # Banner text
+        mock_server = edgesa_config.simulation.mock_server
+        devices_count = len(edgesa_config.simulation.devices)
+        text_label = QLabel(
+            f"<b>SIMULATION MODE ACTIVE</b> - Using mock device APIs "
+            f"(Discovery: {mock_server.host}:{mock_server.discovery_port}, "
+            f"Device API: {mock_server.host}:{mock_server.device_api_port}, "
+            f"{devices_count} simulated devices)"
+        )
+        text_label.setStyleSheet("color: #856404; font-size: 12px;")
+        text_label.setWordWrap(True)
+        banner_layout.addWidget(text_label, 1)
+
+        # Close button (optional - just hides the banner)
+        close_btn = QPushButton("×")
+        close_btn.setFixedSize(24, 24)
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                border: none;
+                color: #856404;
+                font-size: 18px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                color: #533f03;
+            }
+        """)
+        close_btn.setToolTip("Hide this banner (simulation mode remains active)")
+        close_btn.clicked.connect(lambda: self.simulation_banner.hide())
+        banner_layout.addWidget(close_btn)
+
+        layout.addWidget(self.simulation_banner)
+
+        # Log simulation mode startup
+        logger.warning(
+            f"Application started in SIMULATION MODE - "
+            f"Mock server expected at {mock_server.discovery_url}"
+        )
 
     def _connect_signals(self):
         """Connect screen signals to handlers."""
