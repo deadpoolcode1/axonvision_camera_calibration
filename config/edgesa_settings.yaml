@@ -226,3 +226,55 @@ retry:
   backoff_base: 2
   # Maximum backoff time (in seconds)
   max_backoff: 16
+
+# =============================================================================
+# Simulation Mode Configuration
+# =============================================================================
+# When simulation is enabled, the application uses a local mock server
+# instead of real device APIs. Video streams still come from real cameras.
+simulation:
+  # Enable simulation mode (set to true when real devices are not available)
+  enabled: false
+
+  # Mock server configuration
+  mock_server:
+    # Host for mock services
+    host: "127.0.0.1"
+    # Port for mock discovery service
+    discovery_port: 8000
+    # Port for mock device API
+    device_api_port: 5000
+    # Port for mock SFTP server
+    sftp_port: 2222
+
+  # Simulated devices - define your real camera IPs here
+  # These IPs will be returned by the mock discovery service
+  # Video streams will still connect to these real IPs
+  devices:
+    - ip: "192.168.1.10"
+      hostname: "smartcluster-001"
+      type: "smartcluster"
+
+    - ip: "192.168.1.11"
+      hostname: "smartcluster-002"
+      type: "smartcluster"
+
+    - ip: "192.168.1.20"
+      hostname: "threecluster-001"
+      type: "threecluster"
+      initial_mode: "worker"
+
+    - ip: "192.168.1.30"
+      hostname: "aicentral-001"
+      type: "aicentral"
+
+  # Persistence - save device state between runs
+  persistence:
+    enabled: true
+    state_file: "./mock_data/device_states.json"
+    filesystem_path: "./mock_data/devices"
+
+  # Error injection for testing failure scenarios
+  scenarios:
+    # Available scenarios: "happy_path", "partial_ssh_failure", "api_timeout"
+    active_scenario: "happy_path"

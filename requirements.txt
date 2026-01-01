@@ -29,6 +29,14 @@ PyYAML==6.0.1
 # Environment variable management (.env file support)
 python-dotenv==1.0.1
 
+# Mock server for device simulation (optional - for development/testing)
+fastapi==0.109.0
+uvicorn==0.27.0
+pydantic==2.5.3
+
+# SSH/SFTP for device file operations (optional - for production SFTP)
+paramiko==3.4.0
+
 # Pre-commit hooks for code quality (development)
 # pre-commit==3.6.0
 
