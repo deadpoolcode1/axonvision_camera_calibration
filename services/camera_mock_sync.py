@@ -116,6 +116,8 @@ class CameraMockSyncService:
         camera_id = camera_data.get("camera_id", "")
         position = camera_data.get("mounting_position")
 
+        logger.debug(f"sync_camera_added: ip={ip}, type={camera_type}, id={camera_id}, position={position}")
+
         # Map camera type to device type
         device_type = CAMERA_TYPE_TO_DEVICE_TYPE.get(camera_type, "smartcluster")
         mode = CAMERA_TYPE_TO_MODE.get(camera_type, "worker")
