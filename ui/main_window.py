@@ -24,6 +24,7 @@ from .screens.login_screen import LoginScreen
 from .screens.welcome_screen import WelcomeScreen
 from .screens.platform_config_screen import PlatformConfigScreen
 from .screens.camera_preview_screen import CameraPreviewScreen
+from .screens.calibration_summary_screen import CalibrationSummaryScreen
 from .dialogs.log_viewer_dialog import LogViewerDialog
 
 logger = logging.getLogger(__name__)
@@ -113,12 +114,15 @@ class MainWindow(QMainWindow):
         self.platform_config_screen.set_base_path(self.base_path)
         self.camera_preview_screen = CameraPreviewScreen()
         self.camera_preview_screen.set_base_path(self.base_path)
+        self.summary_screen = CalibrationSummaryScreen()
+        self.summary_screen.set_base_path(self.base_path)
 
         # Add screens to stack
         self.screen_stack.addWidget(self.login_screen)  # Index 0
         self.screen_stack.addWidget(self.welcome_screen)  # Index 1
         self.screen_stack.addWidget(self.platform_config_screen)  # Index 2
         self.screen_stack.addWidget(self.camera_preview_screen)  # Index 3
+        self.screen_stack.addWidget(self.summary_screen)  # Index 4
 
         # Start on login screen
         self.screen_stack.setCurrentIndex(0)
@@ -142,6 +146,11 @@ class MainWindow(QMainWindow):
         self.camera_preview_screen.cancel_requested.connect(self._on_camera_preview_cancel)
         self.camera_preview_screen.next_requested.connect(self._on_camera_preview_next)
         self.camera_preview_screen.camera_removed.connect(self._on_camera_removed_preview)
+
+        # Summary screen signals
+        self.summary_screen.cancel_requested.connect(self._on_summary_cancel)
+        self.summary_screen.redo_step_requested.connect(self._on_summary_redo_step)
+        self.summary_screen.finish_requested.connect(self._on_calibration_finished)
 
     def _on_login_successful(self, username: str):
         """Handle successful login."""
@@ -241,12 +250,47 @@ class MainWindow(QMainWindow):
         self.screen_stack.setCurrentWidget(self.platform_config_screen)
 
     def _on_camera_preview_next(self, config: PlatformConfiguration):
-        """Handle Next from camera preview screen."""
+        """Handle Next from camera preview screen - navigate to summary."""
         self.current_config = config
 
         # Save updated configuration
         self.data_store.last_platform_config = config
         self.data_store.save()
+
+        # Navigate to summary screen
+        self.summary_screen.set_config(config)
+        self.screen_stack.setCurrentWidget(self.summary_screen)
+
+    def _on_summary_cancel(self):
+        """Handle Cancel/Back from summary screen - return to camera preview."""
+        self.screen_stack.setCurrentWidget(self.camera_preview_screen)
+
+    def _on_summary_redo_step(self, step_name: str):
+        """Handle redo step request from summary screen."""
+        if step_name == "intrinsic":
+            # Go back to camera preview screen for intrinsic calibration
+            self.screen_stack.setCurrentWidget(self.camera_preview_screen)
+            self.camera_preview_screen.verify_cameras()
+        elif step_name == "extrinsic":
+            # Future: Go to extrinsic calibration screen
+            QMessageBox.information(
+                self,
+                "Extrinsic Calibration",
+                "Extrinsic calibration is not yet implemented.\n"
+                "This feature will be available in a future update."
+            )
+
+    def _on_calibration_finished(self):
+        """Handle calibration finish - return to welcome screen."""
+        QMessageBox.information(
+            self,
+            "Calibration Complete",
+            f"Platform: {self.current_config.platform_type} - {self.current_config.platform_id}\n\n"
+            f"All calibration files have been saved.\n"
+            f"You can now use these files for camera operation."
+        )
+        self.screen_stack.setCurrentWidget(self.welcome_screen)
+        self.welcome_screen.refresh()
 
     def _on_camera_removed_preview(self, camera_index: int):
         """Handle camera removal from preview screen - save updated config."""
