@@ -30,3 +30,6 @@ Pillow>=9.0.0
 
 # Configuration management
 PyYAML>=6.0.1
+
+# Environment variable management (.env file support)
+python-dotenv>=1.0.0
