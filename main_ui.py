@@ -27,7 +27,7 @@ def main():
     """Main entry point for the GUI application."""
     # Initialize logging
     setup_logging(
-        log_level=os.environ.get('LOG_LEVEL', 'INFO'),
+        log_level=os.environ.get('LOG_LEVEL', 'DEBUG'),
         log_to_console=True,
         log_to_file=True,
         colored_console=True

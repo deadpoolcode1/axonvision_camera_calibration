@@ -8,11 +8,14 @@ Configure platform information and camera setup:
 - Validation for camera limits and positions
 """
 
+import logging
 from pathlib import Path
 import subprocess
 import platform
 import random
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QLineEdit, QComboBox, QTableWidget, QTableWidgetItem,
@@ -702,6 +705,8 @@ class CameraTableWidget(QTableWidget):
 
     def _on_position_changed(self, row: int, text: str):
         """Handle mounting position change."""
+        camera_id = self.cellWidget(row, 1).text() if self.cellWidget(row, 1) else f"row_{row}"
+        logger.debug(f"Camera position changed: camera={camera_id}, row={row}, new_position={text}")
         self.camera_data_changed.emit()
 
     def _on_remove_clicked(self, row: int):
@@ -992,7 +997,10 @@ class PlatformConfigScreen(QWidget):
 
     def _on_add_camera(self):
         """Add a new camera to the configuration."""
+        logger.debug(f"Adding new camera (current count: {len(self.config.cameras)})")
+
         if len(self.config.cameras) >= MAX_CAMERAS:
+            logger.debug(f"Camera limit reached: {MAX_CAMERAS}")
             QMessageBox.warning(
                 self,
                 "Camera Limit Reached",
@@ -1001,6 +1009,8 @@ class PlatformConfigScreen(QWidget):
             return
 
         camera = self.config.add_camera()
+        logger.debug(f"Camera created: id={camera.camera_id}, ip={camera.ip_address}, position={camera.mounting_position}")
+
         self.camera_table.add_camera_row(camera, self.base_path)
         self._update_camera_count()
         # Add only the new preview widget, don't rebuild all existing ones
@@ -1011,24 +1021,31 @@ class PlatformConfigScreen(QWidget):
 
         # Emit signal so config can be saved immediately
         self.config_changed.emit(self.config)
+        logger.debug(f"Camera add complete: {camera.camera_id}")
 
     def _sync_camera_to_mock(self, camera: CameraDefinition):
         """Sync a camera to a mock device in simulation mode."""
+        logger.debug(f"Syncing camera to mock device: {camera.camera_id}, ip={camera.ip_address}")
         if self._mock_sync_service:
             try:
                 self._mock_sync_service.sync_camera_added(camera.to_dict())
+                logger.debug(f"Mock sync successful: {camera.camera_id}")
             except Exception as e:
-                import logging
-                logging.getLogger(__name__).debug(f"Mock sync failed: {e}")
+                logger.debug(f"Mock sync failed: {e}")
+        else:
+            logger.debug("Mock sync service not available (simulation mode disabled)")
 
     def _remove_camera_from_mock(self, ip_address: str):
         """Remove a camera from mock devices in simulation mode."""
+        logger.debug(f"Removing camera from mock device: ip={ip_address}")
         if self._mock_sync_service:
             try:
                 self._mock_sync_service.sync_camera_removed(ip_address)
+                logger.debug(f"Mock removal successful: ip={ip_address}")
             except Exception as e:
-                import logging
-                logging.getLogger(__name__).debug(f"Mock removal failed: {e}")
+                logger.debug(f"Mock removal failed: {e}")
+        else:
+            logger.debug("Mock sync service not available (simulation mode disabled)")
 
     def _add_single_preview(self, camera):
         """Add a single camera preview widget without affecting existing previews."""
