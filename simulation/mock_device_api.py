@@ -511,3 +511,74 @@ async def sftp_list_files(
     result = state_manager.list_files(x_device_ip, path)
 
     return result
+
+
+# =============================================================================
+# Video Stream Simulation Endpoints
+# =============================================================================
+# These endpoints mock the camera's video streaming API.
+# In simulation mode, these return success without actually starting a stream.
+# The real video comes from the actual camera's existing stream.
+
+class StreamStartRequest(BaseModel):
+    """Request to start video stream."""
+    host: str = "239.255.0.1"
+    port: int = 5010
+    bitrate: int = 4000000
+
+
+class StreamResponse(BaseModel):
+    """Video stream response."""
+    status: str
+    message: Optional[str] = None
+
+
+@router.post("/api/stream/start", response_model=StreamResponse)
+async def start_stream(
+    request: StreamStartRequest,
+    x_device_ip: str = Header(...)
+):
+    """
+    Mock endpoint to start camera video streaming.
+
+    In simulation mode, this returns success immediately.
+    The actual video stream should already be available from the real camera.
+    """
+    if state_manager is None:
+        raise HTTPException(status_code=503, detail="State manager not initialized")
+
+    device = state_manager.get_device(x_device_ip)
+    if not device:
+        raise HTTPException(status_code=404, detail=f"Device {x_device_ip} not found")
+
+    logger.info(
+        f"[MOCK] Stream start requested for {x_device_ip}: "
+        f"host={request.host}, port={request.port}, bitrate={request.bitrate}"
+    )
+
+    return StreamResponse(
+        status="success",
+        message=f"Stream started (mock) - connect to {request.host}:{request.port}"
+    )
+
+
+@router.post("/api/stream/stop", response_model=StreamResponse)
+async def stop_stream(x_device_ip: str = Header(...)):
+    """
+    Mock endpoint to stop camera video streaming.
+
+    In simulation mode, this returns success immediately.
+    """
+    if state_manager is None:
+        raise HTTPException(status_code=503, detail="State manager not initialized")
+
+    device = state_manager.get_device(x_device_ip)
+    if not device:
+        raise HTTPException(status_code=404, detail=f"Device {x_device_ip} not found")
+
+    logger.info(f"[MOCK] Stream stop requested for {x_device_ip}")
+
+    return StreamResponse(
+        status="success",
+        message="Stream stopped (mock)"
+    )

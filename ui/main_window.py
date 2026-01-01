@@ -173,13 +173,12 @@ class MainWindow(QMainWindow):
         banner_layout.addWidget(icon_label)
 
         # Banner text - don't show YAML device count, it's misleading
-        # Simulation mode mocks settings APIs, not video streaming
+        # Simulation mode mocks settings/config APIs, video streams from real cameras
         mock_server = edgesa_config.simulation.mock_server
         text_label = QLabel(
             f"<b>SIMULATION MODE ACTIVE</b> - Using mock device APIs "
             f"(Discovery: {mock_server.host}:{mock_server.discovery_port}, "
-            f"Device API: {mock_server.host}:{mock_server.device_api_port}) - "
-            f"Video preview disabled"
+            f"Device API: {mock_server.host}:{mock_server.device_api_port})"
         )
         text_label.setStyleSheet("color: #856404; font-size: 12px;")
         text_label.setWordWrap(True)
