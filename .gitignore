@@ -18,3 +18,4 @@ calibration_images/
 
 # OS
 .DS_Store
+mock_data/
