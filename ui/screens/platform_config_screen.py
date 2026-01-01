@@ -225,9 +225,10 @@ class CameraStreamWorker(QObject):
 
     connection_ready = Signal(bool, str)  # success, error_message
 
-    def __init__(self, ip_address: str, parent=None):
+    def __init__(self, ip_address: str, parent=None, mock_api_url: str = None):
         super().__init__(parent)
         self.ip_address = ip_address
+        self.mock_api_url = mock_api_url  # If set, route stream API through mock server
         self.camera_source = None
         self._is_running = True
 
@@ -251,7 +252,8 @@ class CameraStreamWorker(QObject):
                 api_port=5000,
                 multicast_host="239.255.0.1",
                 stream_port=5010,
-                timeout=5.0
+                timeout=5.0,
+                mock_api_url=self.mock_api_url
             )
 
             if self.camera_source.connect():
@@ -272,10 +274,11 @@ class CameraPreviewWidget(QFrame):
 
     close_requested = Signal()  # Emitted when user clicks the X button
 
-    def __init__(self, camera_id: str, ip_address: str, parent=None):
+    def __init__(self, camera_id: str, ip_address: str, parent=None, mock_api_url: str = None):
         super().__init__(parent)
         self.camera_id = camera_id
         self.ip_address = ip_address
+        self._mock_api_url = mock_api_url  # If set, route stream API through mock server
         self._pending_ip = None  # Pending IP for debounced restart
         self.camera_source: Optional['NetworkCameraSource'] = None
         self.timer = QTimer()
@@ -389,8 +392,9 @@ class CameraPreviewWidget(QFrame):
         self._cleanup_stream_thread()
 
         # Create worker and thread for non-blocking connection
+        # Pass mock_api_url to route stream API through mock server if configured
         self._stream_thread = QThread()
-        self._stream_worker = CameraStreamWorker(self.ip_address)
+        self._stream_worker = CameraStreamWorker(self.ip_address, mock_api_url=self._mock_api_url)
         self._stream_worker.moveToThread(self._stream_thread)
 
         # Connect signals
@@ -772,6 +776,21 @@ class PlatformConfigScreen(QWidget):
             logging.getLogger(__name__).warning(f"Could not initialize mock sync service: {e}")
             self._mock_sync_service = None
 
+    def _get_mock_api_url(self) -> str:
+        """Get mock API URL if simulation mode is enabled.
+
+        Returns:
+            Mock API URL (e.g., 'http://127.0.0.1:5000') if simulation enabled, None otherwise.
+        """
+        sim_settings = self._settings.get("simulation", {})
+        if not sim_settings.get("enabled", False):
+            return None
+        # Build mock API URL from settings
+        # Default to 127.0.0.1:5000 if not specified
+        host = "127.0.0.1"
+        port = 5000
+        return f"http://{host}:{port}"
+
     def _setup_ui(self):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(40, 20, 40, 20)
@@ -1013,7 +1032,11 @@ class PlatformConfigScreen(QWidget):
 
     def _add_single_preview(self, camera):
         """Add a single camera preview widget without affecting existing previews."""
-        preview = CameraPreviewWidget(camera.camera_id, camera.ip_address)
+        preview = CameraPreviewWidget(
+            camera.camera_id,
+            camera.ip_address,
+            mock_api_url=self._get_mock_api_url()
+        )
         self.preview_widgets.append(preview)
 
         # Connect close button signal to remove the camera
@@ -1186,8 +1209,13 @@ class PlatformConfigScreen(QWidget):
 
         # Create preview widgets for each camera
         row, col = 0, 0
+        mock_api_url = self._get_mock_api_url()
         for camera in self.config.cameras:
-            preview = CameraPreviewWidget(camera.camera_id, camera.ip_address)
+            preview = CameraPreviewWidget(
+                camera.camera_id,
+                camera.ip_address,
+                mock_api_url=mock_api_url
+            )
             # Connect close button signal to remove the camera
             preview.close_requested.connect(lambda p=preview: self._on_preview_close_requested(p))
             self.preview_widgets.append(preview)

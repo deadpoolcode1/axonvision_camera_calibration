@@ -364,7 +364,7 @@ class NetworkCameraSource(ImageSource):
     def __init__(self, ip: str = "10.100.102.222", api_port: int = 5000,
                  multicast_host: str = "239.255.0.1", stream_port: int = 5010,
                  bitrate: int = 4000000, width: int = 1920, height: int = 1080,
-                 timeout: float = 5.0):
+                 timeout: float = 5.0, mock_api_url: str = None):
         self.ip = ip
         self.api_port = api_port
         self.multicast_host = multicast_host
@@ -373,6 +373,7 @@ class NetworkCameraSource(ImageSource):
         self.width = width
         self.height = height
         self.timeout = timeout
+        self.mock_api_url = mock_api_url  # If set, route stream API through mock server
         self.cap: Optional[cv2.VideoCapture] = None
         self._stream_started = False
         self.last_error: str = ""  # Store last error message for UI feedback
@@ -388,6 +389,25 @@ class NetworkCameraSource(ImageSource):
     def base_url(self) -> str:
         return f"http://{self.ip}:{self.api_port}"
 
+    def _get_api_url(self, endpoint: str) -> tuple:
+        """Get API URL and headers, routing through mock server if configured.
+
+        Returns:
+            (url, headers) tuple
+        """
+        if self.mock_api_url:
+            # Route through mock server with X-Device-IP header
+            return (
+                f"{self.mock_api_url}{endpoint}",
+                {"Content-Type": "application/json", "X-Device-IP": self.ip}
+            )
+        else:
+            # Direct to camera
+            return (
+                f"{self.base_url}{endpoint}",
+                {"Content-Type": "application/json"}
+            )
+
     def _start_stream(self) -> bool:
         """Start camera streaming via API"""
         try:
@@ -396,10 +416,11 @@ class NetworkCameraSource(ImageSource):
                 "port": self.stream_port,
                 "bitrate": self.bitrate
             }
+            url, headers = self._get_api_url("/api/stream/start")
             response = self.requests.post(
-                f"{self.base_url}/api/stream/start",
+                url,
                 json=payload,
-                headers={"Content-Type": "application/json"},
+                headers=headers,
                 timeout=self.timeout
             )
             if response.status_code == 200:
@@ -421,9 +442,10 @@ class NetworkCameraSource(ImageSource):
     def _stop_stream(self):
         """Stop camera streaming via API"""
         try:
+            url, headers = self._get_api_url("/api/stream/stop")
             self.requests.post(
-                f"{self.base_url}/api/stream/stop",
-                headers={"Content-Type": "application/json"},
+                url,
+                headers=headers,
                 timeout=self.timeout
             )
         except Exception:
