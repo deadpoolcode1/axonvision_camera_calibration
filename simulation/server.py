@@ -99,15 +99,13 @@ def check_port_available(host: str, port: int) -> bool:
         return False
 
 
-def print_banner(config: Dict[str, Any]):
+def print_banner(config: Dict[str, Any], state_manager=None):
     """Print startup banner with server information."""
     mock_server = config.get("mock_server", {})
     host = mock_server.get("host", "127.0.0.1")
     discovery_port = mock_server.get("discovery_port", 8000)
     device_api_port = mock_server.get("device_api_port", 5000)
     sftp_port = mock_server.get("sftp_port", 2222)
-
-    devices = config.get("devices", [])
 
     banner = f"""
 ================================================================================
@@ -124,12 +122,23 @@ def print_banner(config: Dict[str, Any]):
   Simulated Devices:
 """
 
-    for device in devices:
-        device_type = device.get("type", "unknown")
-        hostname = device.get("hostname", "unknown")
-        ip = device.get("ip", "unknown")
-        mode = device.get("initial_mode", "worker" if device_type != "aicentral" else "manager")
-        banner += f"    - {hostname} ({device_type}) @ {ip} [{mode}]\n"
+    # Get devices from state manager if available (actual user-configured cameras)
+    if state_manager:
+        devices = state_manager.get_all_devices()
+        if devices:
+            for device in devices:
+                banner += f"    - {device.hostname} ({device.device_type}) @ {device.ip} [{device.mode}]\n"
+        else:
+            banner += "    (No devices configured - add cameras in the UI)\n"
+    else:
+        # Fallback to config
+        devices = config.get("devices", [])
+        for device in devices:
+            device_type = device.get("type", "unknown")
+            hostname = device.get("hostname", "unknown")
+            ip = device.get("ip", "unknown")
+            mode = device.get("initial_mode", "worker" if device_type != "aicentral" else "manager")
+            banner += f"    - {hostname} ({device_type}) @ {ip} [{mode}]\n"
 
     banner += f"""
   Data Directory:  {config.get('persistence', {}).get('filesystem_path', './mock_data/devices')}
@@ -278,12 +287,38 @@ def start_mock_server(
             return None
 
     # Initialize device state manager
+    # If state file exists, use it (dynamic devices from UI take priority)
+    # Otherwise fall back to devices from YAML config
     from .device_state import DeviceStateManager
-    state_manager = DeviceStateManager(
-        state_file=state_file,
-        filesystem_path=fs_path,
-        initial_devices=devices_config
-    )
+    from pathlib import Path as PathLib
+
+    # Check if we have persisted state
+    has_persisted_state = state_file and PathLib(state_file).exists()
+
+    if has_persisted_state:
+        # Load from persisted state - these are the user's actual camera configs
+        state_manager = DeviceStateManager(
+            state_file=state_file,
+            filesystem_path=fs_path,
+            initial_devices=None  # Don't use YAML devices, use saved state
+        )
+        logger.info(f"Loaded devices from persisted state: {state_file}")
+
+        # If no devices in state file, fall back to YAML config
+        if not state_manager.get_all_devices():
+            logger.info("No devices in state file, using YAML config as fallback")
+            state_manager = DeviceStateManager(
+                state_file=state_file,
+                filesystem_path=fs_path,
+                initial_devices=devices_config
+            )
+    else:
+        # No persisted state - use YAML config as initial devices
+        state_manager = DeviceStateManager(
+            state_file=state_file,
+            filesystem_path=fs_path,
+            initial_devices=devices_config
+        )
 
     # Create FastAPI apps
     discovery_app = create_discovery_app(state_manager)
@@ -332,7 +367,7 @@ def start_mock_server(
             time.sleep(0.5)
 
     if blocking:
-        print_banner(config)
+        print_banner(config, state_manager)
 
         def signal_handler(sig, frame):
             global _mock_server_running

@@ -208,11 +208,41 @@ class CalibrationDataStore:
 
     DEFAULT_FILE = "calibration_sessions.json"
 
-    def __init__(self, storage_path: Optional[str] = None):
+    def __init__(self, storage_path: Optional[str] = None, settings: Optional[Dict[str, Any]] = None):
         self.storage_path = storage_path or self.DEFAULT_FILE
         self.sessions: List[CalibrationSession] = []
         self.last_platform_config: Optional[PlatformConfiguration] = None
+        self._settings = settings or {}
+        self._mock_sync_service = None
         self._load()
+        # Sync cameras to mock devices after loading
+        self._sync_cameras_to_mock()
+
+    def _get_mock_sync_service(self):
+        """Get the mock sync service (lazy initialization)."""
+        if self._mock_sync_service is None:
+            try:
+                from services.camera_mock_sync import get_camera_mock_sync_service
+                self._mock_sync_service = get_camera_mock_sync_service(self._settings)
+            except Exception as e:
+                logger.debug(f"Could not get mock sync service: {e}")
+        return self._mock_sync_service
+
+    def _sync_cameras_to_mock(self):
+        """Sync all cameras from platform config to mock devices."""
+        if not self.last_platform_config:
+            return
+
+        sync_service = self._get_mock_sync_service()
+        if sync_service and sync_service.is_simulation_enabled():
+            cameras = [cam.to_dict() for cam in self.last_platform_config.cameras]
+            try:
+                result = sync_service.sync_all_cameras(cameras)
+                if result.get("created") or result.get("updated") or result.get("removed"):
+                    logger.info(f"Mock device sync: created={result.get('created', 0)}, "
+                               f"updated={result.get('updated', 0)}, removed={result.get('removed', 0)}")
+            except Exception as e:
+                logger.debug(f"Mock sync failed: {e}")
 
     def _load(self) -> None:
         """Load data from storage file."""
@@ -248,6 +278,9 @@ class CalibrationDataStore:
         with open(self.storage_path, 'w') as f:
             json.dump(data, f, indent=2)
 
+        # Sync cameras to mock devices after save
+        self._sync_cameras_to_mock()
+
     def add_session(self, session: CalibrationSession) -> None:
         """Add a new calibration session."""
         self.sessions.insert(0, session)  # Most recent first
@@ -275,6 +308,18 @@ class CalibrationDataStore:
             if session.session_id == session_id:
                 return session
         return None
+
+    def save_platform_config(self, config: PlatformConfiguration) -> None:
+        """
+        Save platform configuration.
+
+        This updates the last_platform_config and syncs cameras to mock devices.
+
+        Args:
+            config: PlatformConfiguration to save
+        """
+        self.last_platform_config = config
+        self.save()
 
     @staticmethod
     def generate_session_id(platform_id: str) -> str:
