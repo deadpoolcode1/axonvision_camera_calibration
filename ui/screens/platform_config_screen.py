@@ -272,10 +272,11 @@ class CameraPreviewWidget(QFrame):
 
     close_requested = Signal()  # Emitted when user clicks the X button
 
-    def __init__(self, camera_id: str, ip_address: str, parent=None):
+    def __init__(self, camera_id: str, ip_address: str, parent=None, simulation_mode: bool = False):
         super().__init__(parent)
         self.camera_id = camera_id
         self.ip_address = ip_address
+        self._simulation_mode = simulation_mode  # In simulation mode, don't try video streaming
         self._pending_ip = None  # Pending IP for debounced restart
         self.camera_source: Optional['NetworkCameraSource'] = None
         self.timer = QTimer()
@@ -376,6 +377,17 @@ class CameraPreviewWidget(QFrame):
 
     def start_streaming(self):
         """Start camera streaming in a background thread."""
+        # In simulation mode, don't try video streaming - show placeholder instead
+        if self._simulation_mode:
+            self.video_label.setText("Simulation mode\n(no video)")
+            self.video_label.setStyleSheet(f"""
+                background-color: #2d3748;
+                border-radius: 4px;
+                color: #a0aec0;
+                font-size: 10px;
+            """)
+            return
+
         if self._is_streaming or self._is_connecting or NetworkCameraSource is None:
             return
         if not self.ip_address:
@@ -548,7 +560,12 @@ class CameraPreviewWidget(QFrame):
         self.video_label.setPixmap(QPixmap.fromImage(q_image))
 
     def is_camera_reachable(self) -> bool:
-        """Check if camera is reachable (streaming or ping successful)."""
+        """Check if camera is reachable (streaming or ping successful).
+
+        In simulation mode, always returns True since cameras are mocked.
+        """
+        if self._simulation_mode:
+            return True
         return self._is_streaming or self._ping_success
 
     def check_ping(self) -> bool:
@@ -771,6 +788,11 @@ class PlatformConfigScreen(QWidget):
             import logging
             logging.getLogger(__name__).warning(f"Could not initialize mock sync service: {e}")
             self._mock_sync_service = None
+
+    def _is_simulation_mode(self) -> bool:
+        """Check if simulation mode is enabled."""
+        sim_settings = self._settings.get("simulation", {})
+        return sim_settings.get("enabled", False)
 
     def _setup_ui(self):
         main_layout = QVBoxLayout(self)
@@ -1013,7 +1035,11 @@ class PlatformConfigScreen(QWidget):
 
     def _add_single_preview(self, camera):
         """Add a single camera preview widget without affecting existing previews."""
-        preview = CameraPreviewWidget(camera.camera_id, camera.ip_address)
+        preview = CameraPreviewWidget(
+            camera.camera_id,
+            camera.ip_address,
+            simulation_mode=self._is_simulation_mode()
+        )
         self.preview_widgets.append(preview)
 
         # Connect close button signal to remove the camera
@@ -1186,8 +1212,13 @@ class PlatformConfigScreen(QWidget):
 
         # Create preview widgets for each camera
         row, col = 0, 0
+        sim_mode = self._is_simulation_mode()
         for camera in self.config.cameras:
-            preview = CameraPreviewWidget(camera.camera_id, camera.ip_address)
+            preview = CameraPreviewWidget(
+                camera.camera_id,
+                camera.ip_address,
+                simulation_mode=sim_mode
+            )
             # Connect close button signal to remove the camera
             preview.close_requested.connect(lambda p=preview: self._on_preview_close_requested(p))
             self.preview_widgets.append(preview)
