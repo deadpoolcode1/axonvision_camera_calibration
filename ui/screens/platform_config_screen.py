@@ -1137,9 +1137,22 @@ class PlatformConfigScreen(QWidget):
         self.config_changed.emit(self.config)
 
     def _on_camera_data_changed(self):
-        """Handle any camera data change - validate and update preview."""
+        """Handle any camera data change - validate, update preview, and sync to mock."""
         self._validate_configuration()
         self._update_preview_info()
+        # Sync all camera changes to mock devices (simulation mode)
+        self._sync_all_cameras_to_mock()
+
+    def _sync_all_cameras_to_mock(self):
+        """Sync all cameras to mock devices in simulation mode."""
+        if self._mock_sync_service:
+            try:
+                cameras = self.camera_table.get_all_cameras()
+                logger.debug(f"Syncing {len(cameras)} cameras to mock devices")
+                result = self._mock_sync_service.sync_all_cameras(cameras)
+                logger.debug(f"Mock sync result: {result}")
+            except Exception as e:
+                logger.debug(f"Mock sync failed: {e}")
 
     def _update_camera_count(self):
         """Update the camera count label."""
