@@ -49,6 +49,14 @@ from ..data_models import (
     VALID_3_1_POSITIONS, MAX_CAMERAS, MAX_AI_CENTRAL_CAMERAS
 )
 
+# Import camera-mock sync service
+try:
+    from services.camera_mock_sync import get_camera_mock_sync_service
+except ImportError:
+    # Fallback if import fails
+    def get_camera_mock_sync_service(settings=None):
+        return None
+
 # Import camera streaming from intrinsic_calibration module
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -744,13 +752,25 @@ class PlatformConfigScreen(QWidget):
     next_requested = Signal(PlatformConfiguration)
     config_changed = Signal(PlatformConfiguration)  # Emitted when camera is added/removed
 
-    def __init__(self, config: PlatformConfiguration = None, parent=None):
+    def __init__(self, config: PlatformConfiguration = None, parent=None, settings=None):
         super().__init__(parent)
         self.config = config or PlatformConfiguration()
         self.base_path = "."
         self.preview_widgets = []
+        self._settings = settings or {}
+        self._mock_sync_service = None
+        self._init_mock_sync_service()
         self._setup_ui()
         self._load_config()
+
+    def _init_mock_sync_service(self):
+        """Initialize the mock sync service if simulation is enabled."""
+        try:
+            self._mock_sync_service = get_camera_mock_sync_service(self._settings)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Could not initialize mock sync service: {e}")
+            self._mock_sync_service = None
 
     def _setup_ui(self):
         main_layout = QVBoxLayout(self)
@@ -967,8 +987,29 @@ class PlatformConfigScreen(QWidget):
         # Add only the new preview widget, don't rebuild all existing ones
         self._add_single_preview(camera)
 
+        # Sync to mock device (simulation mode)
+        self._sync_camera_to_mock(camera)
+
         # Emit signal so config can be saved immediately
         self.config_changed.emit(self.config)
+
+    def _sync_camera_to_mock(self, camera: CameraDefinition):
+        """Sync a camera to a mock device in simulation mode."""
+        if self._mock_sync_service:
+            try:
+                self._mock_sync_service.sync_camera_added(camera.to_dict())
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).debug(f"Mock sync failed: {e}")
+
+    def _remove_camera_from_mock(self, ip_address: str):
+        """Remove a camera from mock devices in simulation mode."""
+        if self._mock_sync_service:
+            try:
+                self._mock_sync_service.sync_camera_removed(ip_address)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).debug(f"Mock removal failed: {e}")
 
     def _add_single_preview(self, camera):
         """Add a single camera preview widget without affecting existing previews."""
@@ -1038,11 +1079,18 @@ class PlatformConfigScreen(QWidget):
         # This ensures IP changes made in the table are saved
         self._update_config_from_ui()
 
+        # Get the camera IP before removing (for mock device cleanup)
+        camera_ip = self.config.cameras[row].ip_address if row < len(self.config.cameras) else None
+
         self.config.remove_camera(row)
         self._reload_camera_table()
         self._update_camera_count()
         # Only remove the specific preview, keep other valid connections
         self._remove_preview_at_index(row)
+
+        # Remove from mock devices (simulation mode)
+        if camera_ip:
+            self._remove_camera_from_mock(camera_ip)
 
         # Emit signal so config can be saved immediately
         self.config_changed.emit(self.config)

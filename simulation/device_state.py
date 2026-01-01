@@ -312,6 +312,41 @@ class DeviceStateManager:
             device.last_updated = datetime.utcnow().isoformat() + "Z"
             self._devices[device.ip] = device
             self._save_state()
+            logger.info(f"Added/updated device: {device.hostname} ({device.ip})")
+
+    def remove_device(self, ip: str) -> bool:
+        """
+        Remove a device by IP address.
+
+        Args:
+            ip: IP address of the device to remove
+
+        Returns:
+            True if device was removed, False if not found
+        """
+        with self._lock:
+            if ip not in self._devices:
+                logger.warning(f"Device not found for removal: {ip}")
+                return False
+
+            device = self._devices.pop(ip)
+            self._save_state()
+
+            # Also clean up the device's virtual filesystem
+            if self._filesystem_path:
+                fs_path = Path(self._filesystem_path) / ip
+                if fs_path.exists():
+                    import shutil
+                    shutil.rmtree(fs_path)
+                    logger.debug(f"Removed filesystem for device: {ip}")
+
+            logger.info(f"Removed device: {device.hostname} ({ip})")
+            return True
+
+    def has_device(self, ip: str) -> bool:
+        """Check if a device with the given IP exists."""
+        with self._lock:
+            return ip in self._devices
 
     def update_device(self, ip: str, **updates) -> Optional[SimulatedDevice]:
         """Update device properties."""
