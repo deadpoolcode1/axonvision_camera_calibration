@@ -258,6 +258,69 @@ class LoggingConfig:
     file_backup_count: int = 3
 
 
+@dataclass
+class MockServerConfig:
+    """Mock server configuration."""
+    host: str = "127.0.0.1"
+    discovery_port: int = 8000
+    device_api_port: int = 5000
+    sftp_port: int = 2222
+
+    @property
+    def discovery_url(self) -> str:
+        """Full URL for mock discovery service."""
+        return f"http://{self.host}:{self.discovery_port}"
+
+    @property
+    def device_api_url(self) -> str:
+        """Full URL for mock device API."""
+        return f"http://{self.host}:{self.device_api_port}"
+
+
+@dataclass
+class SimulatedDeviceConfig:
+    """Configuration for a simulated device."""
+    ip: str
+    hostname: str
+    device_type: str
+    initial_mode: str = "worker"
+
+
+@dataclass
+class SimulationPersistenceConfig:
+    """Persistence configuration for simulation."""
+    enabled: bool = True
+    state_file: str = "./mock_data/device_states.json"
+    filesystem_path: str = "./mock_data/devices"
+
+
+@dataclass
+class SimulationConfig:
+    """
+    Simulation mode configuration.
+
+    When enabled, the application uses mock services instead of real device APIs.
+    Video streams still come from real cameras.
+    """
+    enabled: bool = False
+    mock_server: MockServerConfig = field(default_factory=MockServerConfig)
+    devices: List[SimulatedDeviceConfig] = field(default_factory=list)
+    persistence: SimulationPersistenceConfig = field(default_factory=SimulationPersistenceConfig)
+    active_scenario: str = "happy_path"
+
+    def get_device_config_list(self) -> List[Dict[str, Any]]:
+        """Get devices as list of dicts for state manager initialization."""
+        return [
+            {
+                "ip": d.ip,
+                "hostname": d.hostname,
+                "type": d.device_type,
+                "initial_mode": d.initial_mode
+            }
+            for d in self.devices
+        ]
+
+
 # =============================================================================
 # Main Configuration Class
 # =============================================================================
@@ -336,6 +399,7 @@ class EdgeSAConfig:
         self.retry = RetryConfig()
         self.validation = ValidationConfig()
         self.logging = LoggingConfig()
+        self.simulation = SimulationConfig()
         self.sensor_types: List[str] = ["vis", "thermal", "day", "night"]
 
         # Load configuration
@@ -575,6 +639,55 @@ class EdgeSAConfig:
 
         # Sensor types
         self.sensor_types = self._get_value("sensor_types", ["vis", "thermal", "day", "night"])
+
+        # Simulation configuration
+        self._load_simulation_config()
+
+    def _load_simulation_config(self) -> None:
+        """Load simulation mode configuration."""
+        sim_config = self._get_value("simulation", {})
+
+        # Mock server configuration
+        mock_server_config = sim_config.get("mock_server", {})
+        mock_server = MockServerConfig(
+            host=mock_server_config.get("host", "127.0.0.1"),
+            discovery_port=mock_server_config.get("discovery_port", 8000),
+            device_api_port=mock_server_config.get("device_api_port", 5000),
+            sftp_port=mock_server_config.get("sftp_port", 2222)
+        )
+
+        # Simulated devices
+        devices_config = sim_config.get("devices", [])
+        devices = []
+        for dev in devices_config:
+            device_type = dev.get("type", "smartcluster")
+            default_mode = "manager" if device_type == "aicentral" else "worker"
+            devices.append(SimulatedDeviceConfig(
+                ip=dev.get("ip", ""),
+                hostname=dev.get("hostname", ""),
+                device_type=device_type,
+                initial_mode=dev.get("initial_mode", default_mode)
+            ))
+
+        # Persistence configuration
+        persistence_config = sim_config.get("persistence", {})
+        persistence = SimulationPersistenceConfig(
+            enabled=persistence_config.get("enabled", True),
+            state_file=persistence_config.get("state_file", "./mock_data/device_states.json"),
+            filesystem_path=persistence_config.get("filesystem_path", "./mock_data/devices")
+        )
+
+        # Build simulation config
+        self.simulation = SimulationConfig(
+            enabled=self._get_value("simulation.enabled", False),
+            mock_server=mock_server,
+            devices=devices,
+            persistence=persistence,
+            active_scenario=sim_config.get("scenarios", {}).get("active_scenario", "happy_path")
+        )
+
+        if self.simulation.enabled:
+            logger.info("Simulation mode is ENABLED")
 
     def _load_device_types(self) -> None:
         """Load device type configurations."""
