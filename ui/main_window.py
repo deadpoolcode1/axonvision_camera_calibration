@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QStackedWidget, QWidget, QVBoxLayout, QHBoxLayout,
     QMessageBox, QPushButton, QMenu, QLabel, QFrame
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction
 
 from . import __version__
@@ -196,6 +196,37 @@ class MainWindow(QMainWindow):
             f"Application started in SIMULATION MODE - "
             f"Mock server expected at {mock_server.discovery_url}"
         )
+
+        # Schedule health check after UI is rendered
+        QTimer.singleShot(500, self._check_simulation_server_health)
+
+    def _check_simulation_server_health(self):
+        """Check if simulation mock server is reachable and warn user if not."""
+        if not edgesa_config.simulation.enabled:
+            return
+
+        from services.device_config_service import DeviceConfigService
+
+        service = DeviceConfigService()
+        is_healthy, message = service.check_discovery_health()
+
+        if not is_healthy:
+            mock_server = edgesa_config.simulation.mock_server
+            QMessageBox.warning(
+                self,
+                "Simulation Server Not Running",
+                f"<b>Simulation mode is enabled but the mock server is not reachable.</b><br><br>"
+                f"Expected server at: <code>{mock_server.discovery_url}</code><br><br>"
+                f"Error: {message}<br><br>"
+                f"<b>To start the mock server, run:</b><br>"
+                f"<code>python -m simulation.server</code><br><br>"
+                f"Camera connections will fail until the server is running."
+            )
+            logger.error(
+                f"Simulation mock server not reachable at {mock_server.discovery_url}: {message}"
+            )
+        else:
+            logger.info(f"Simulation mock server health check passed: {message}")
 
     def _connect_signals(self):
         """Connect screen signals to handlers."""
