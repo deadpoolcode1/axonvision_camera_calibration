@@ -44,8 +44,11 @@ class MainWindow(QMainWindow):
         # Determine base path (where the app is run from)
         self.base_path = str(Path.cwd())
 
-        # Initialize data store
-        self.data_store = CalibrationDataStore()
+        # Build settings dict for components that need simulation mode info
+        self._settings = self._build_settings_dict()
+
+        # Initialize data store with settings for mock sync
+        self.data_store = CalibrationDataStore(settings=self._settings)
 
         # Current session state
         self.current_session = None
@@ -54,6 +57,18 @@ class MainWindow(QMainWindow):
 
         self._setup_ui()
         self._connect_signals()
+
+    def _build_settings_dict(self) -> dict:
+        """Build settings dict from edgesa_config for components that need it."""
+        return {
+            "simulation": {
+                "enabled": edgesa_config.simulation.enabled,
+                "persistence": {
+                    "state_file": edgesa_config.simulation.persistence.state_file,
+                    "filesystem_path": edgesa_config.simulation.persistence.filesystem_path,
+                }
+            }
+        }
 
     def _setup_ui(self):
         """Setup the main window UI."""
@@ -114,7 +129,7 @@ class MainWindow(QMainWindow):
         # Create screens
         self.login_screen = LoginScreen()
         self.welcome_screen = WelcomeScreen(self.data_store)
-        self.platform_config_screen = PlatformConfigScreen()
+        self.platform_config_screen = PlatformConfigScreen(settings=self._settings)
         self.platform_config_screen.set_base_path(self.base_path)
         self.camera_preview_screen = CameraPreviewScreen()
         self.camera_preview_screen.set_base_path(self.base_path)
