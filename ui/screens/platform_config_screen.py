@@ -1032,10 +1032,11 @@ class PlatformConfigScreen(QWidget):
 
     def _add_single_preview(self, camera):
         """Add a single camera preview widget without affecting existing previews."""
+        # Note: Don't pass mock_api_url - stream API should always go to real camera
+        # Simulation mode only mocks settings/config APIs, not video streaming
         preview = CameraPreviewWidget(
             camera.camera_id,
-            camera.ip_address,
-            mock_api_url=self._get_mock_api_url()
+            camera.ip_address
         )
         self.preview_widgets.append(preview)
 
@@ -1208,13 +1209,13 @@ class PlatformConfigScreen(QWidget):
                 item.widget().deleteLater()
 
         # Create preview widgets for each camera
+        # Note: Don't pass mock_api_url - stream API should always go to real camera
+        # Simulation mode only mocks settings/config APIs, not video streaming
         row, col = 0, 0
-        mock_api_url = self._get_mock_api_url()
         for camera in self.config.cameras:
             preview = CameraPreviewWidget(
                 camera.camera_id,
-                camera.ip_address,
-                mock_api_url=mock_api_url
+                camera.ip_address
             )
             # Connect close button signal to remove the camera
             preview.close_requested.connect(lambda p=preview: self._on_preview_close_requested(p))
