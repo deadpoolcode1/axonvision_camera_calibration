@@ -31,7 +31,15 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 import yaml
-from dotenv import load_dotenv, dotenv_values
+
+# Optional dependency - support running without python-dotenv installed
+try:
+    from dotenv import load_dotenv, dotenv_values
+    DOTENV_AVAILABLE = True
+except ImportError:
+    DOTENV_AVAILABLE = False
+    load_dotenv = None
+    dotenv_values = None
 
 from .exceptions import ConfigurationLoadError, ConfigurationValidationError
 
@@ -352,6 +360,10 @@ class EdgeSAConfig:
 
     def _load_env_file(self) -> None:
         """Load environment variables from .env file."""
+        if not DOTENV_AVAILABLE:
+            logger.debug("python-dotenv not installed, skipping .env file loading")
+            return
+
         if self._env_file:
             env_path = Path(self._env_file)
         else:
