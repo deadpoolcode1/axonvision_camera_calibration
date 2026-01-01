@@ -169,8 +169,11 @@ def run_fastapi_server(app, host: str, port: int, name: str):
 
 def create_discovery_app(state_manager):
     """Create the FastAPI app for the discovery service."""
-    from fastapi import FastAPI
+    from fastapi import FastAPI, Request
     from fastapi.middleware.cors import CORSMiddleware
+    from starlette.middleware.base import BaseHTTPMiddleware
+    import json
+    import time as time_module
 
     from .mock_discovery import router as discovery_router
     from . import mock_discovery
@@ -180,6 +183,52 @@ def create_discovery_app(state_manager):
         description="Simulates the Hardware Discovery & Provisioning Service",
         version="1.0.0"
     )
+
+    # Debug logging middleware (DEBUG level)
+    class DebugLoggingMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next):
+            start_time = time_module.time()
+
+            # Log incoming request
+            body = b""
+            if request.method in ["POST", "PUT", "PATCH"]:
+                body = await request.body()
+
+            # Format request log
+            req_log = f"\n{'='*60}\n"
+            req_log += f"📥 DISCOVERY API - INCOMING REQUEST\n"
+            req_log += f"{'='*60}\n"
+            req_log += f"  Method: {request.method}\n"
+            req_log += f"  Path:   {request.url.path}\n"
+            req_log += f"  Query:  {dict(request.query_params)}\n"
+
+            if body:
+                try:
+                    body_json = json.loads(body)
+                    req_log += f"  Body:   {json.dumps(body_json, indent=4)}\n"
+                except:
+                    req_log += f"  Body:   {body.decode('utf-8', errors='replace')}\n"
+
+            logger.debug(req_log)
+
+            # Get response
+            response = await call_next(request)
+
+            duration = (time_module.time() - start_time) * 1000
+
+            # Log response
+            resp_log = f"\n{'='*60}\n"
+            resp_log += f"📤 DISCOVERY API - OUTGOING RESPONSE\n"
+            resp_log += f"{'='*60}\n"
+            resp_log += f"  Status:   {response.status_code}\n"
+            resp_log += f"  Duration: {duration:.2f}ms\n"
+            resp_log += f"{'='*60}\n"
+
+            logger.debug(resp_log)
+
+            return response
+
+    app.add_middleware(DebugLoggingMiddleware)
 
     app.add_middleware(
         CORSMiddleware,
@@ -207,8 +256,11 @@ def create_discovery_app(state_manager):
 
 def create_device_api_app(state_manager):
     """Create the FastAPI app for the device API."""
-    from fastapi import FastAPI
+    from fastapi import FastAPI, Request
     from fastapi.middleware.cors import CORSMiddleware
+    from starlette.middleware.base import BaseHTTPMiddleware
+    import json
+    import time as time_module
 
     from .mock_device_api import router as device_router
     from . import mock_device_api
@@ -218,6 +270,62 @@ def create_device_api_app(state_manager):
         description="Simulates the Edge360 Device REST API",
         version="1.0.0"
     )
+
+    # Debug logging middleware (DEBUG level)
+    class DebugLoggingMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next):
+            start_time = time_module.time()
+
+            # Log incoming request
+            body = b""
+            if request.method in ["POST", "PUT", "PATCH"]:
+                body = await request.body()
+
+            # Get device IP from header
+            device_ip = request.headers.get("X-Device-IP", "N/A")
+
+            # Format request log
+            req_log = f"\n{'='*60}\n"
+            req_log += f"📥 DEVICE API - INCOMING REQUEST\n"
+            req_log += f"{'='*60}\n"
+            req_log += f"  Method:      {request.method}\n"
+            req_log += f"  Path:        {request.url.path}\n"
+            req_log += f"  Target IP:   {device_ip}\n"
+            req_log += f"  Query:       {dict(request.query_params)}\n"
+
+            # Log important headers
+            important_headers = {k: v for k, v in request.headers.items()
+                               if k.lower() in ['x-device-ip', 'content-type']}
+            req_log += f"  Headers:     {important_headers}\n"
+
+            if body:
+                try:
+                    body_json = json.loads(body)
+                    req_log += f"  Body:\n{json.dumps(body_json, indent=4)}\n"
+                except:
+                    req_log += f"  Body: {body.decode('utf-8', errors='replace')}\n"
+
+            logger.debug(req_log)
+
+            # Get response
+            response = await call_next(request)
+
+            duration = (time_module.time() - start_time) * 1000
+
+            # Log response
+            resp_log = f"\n{'='*60}\n"
+            resp_log += f"📤 DEVICE API - OUTGOING RESPONSE\n"
+            resp_log += f"{'='*60}\n"
+            resp_log += f"  Target IP:  {device_ip}\n"
+            resp_log += f"  Status:     {response.status_code}\n"
+            resp_log += f"  Duration:   {duration:.2f}ms\n"
+            resp_log += f"{'='*60}\n"
+
+            logger.debug(resp_log)
+
+            return response
+
+    app.add_middleware(DebugLoggingMiddleware)
 
     app.add_middleware(
         CORSMiddleware,

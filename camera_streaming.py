@@ -453,19 +453,44 @@ class CameraStreamController:
         """Start camera streaming via API"""
         print_status("Starting camera stream...", "info")
 
-        try:
-            payload = {
-                "host": self.config.multicast_host,
-                "port": self.config.stream_port,
-                "bitrate": self.config.bitrate
-            }
+        payload = {
+            "host": self.config.multicast_host,
+            "port": self.config.stream_port,
+            "bitrate": self.config.bitrate
+        }
+        headers = {"Content-Type": "application/json"}
+        url = self.config.stream_start_url
 
+        # Log outgoing request
+        print(f"\n{'='*60}")
+        print(f"📤 CAMERA API - START STREAM REQUEST")
+        print(f"{'='*60}")
+        print(f"  URL:     {url}")
+        print(f"  Method:  POST")
+        print(f"  Payload: {json.dumps(payload, indent=4)}")
+        print(f"{'='*60}")
+
+        try:
+            start_time = time.time()
             response = requests.post(
-                self.config.stream_start_url,
+                url,
                 json=payload,
-                headers={"Content-Type": "application/json"},
+                headers=headers,
                 timeout=self.config.timeout
             )
+            duration_ms = (time.time() - start_time) * 1000
+
+            # Log response
+            print(f"\n{'='*60}")
+            print(f"📥 CAMERA API - START STREAM RESPONSE")
+            print(f"{'='*60}")
+            print(f"  Status:   {response.status_code}")
+            print(f"  Duration: {duration_ms:.2f}ms")
+            try:
+                print(f"  Body:     {json.dumps(response.json(), indent=4)}")
+            except:
+                print(f"  Body:     {response.text[:500] if response.text else '(empty)'}")
+            print(f"{'='*60}\n")
 
             if response.status_code == 200:
                 self.stream_active = True
@@ -474,18 +499,44 @@ class CameraStreamController:
                 return False, f"Failed to start stream: HTTP {response.status_code}"
 
         except requests.exceptions.RequestException as e:
+            print(f"\n❌ CAMERA API - REQUEST FAILED: {e}\n")
             return False, f"Failed to start stream: {str(e)}"
 
     def stop_stream(self) -> Tuple[bool, str]:
         """Stop camera streaming via API"""
         print_status("Stopping camera stream...", "info")
 
+        headers = {"Content-Type": "application/json"}
+        url = self.config.stream_stop_url
+
+        # Log outgoing request
+        print(f"\n{'='*60}")
+        print(f"📤 CAMERA API - STOP STREAM REQUEST")
+        print(f"{'='*60}")
+        print(f"  URL:     {url}")
+        print(f"  Method:  POST")
+        print(f"{'='*60}")
+
         try:
+            start_time = time.time()
             response = requests.post(
-                self.config.stream_stop_url,
-                headers={"Content-Type": "application/json"},
+                url,
+                headers=headers,
                 timeout=self.config.timeout
             )
+            duration_ms = (time.time() - start_time) * 1000
+
+            # Log response
+            print(f"\n{'='*60}")
+            print(f"📥 CAMERA API - STOP STREAM RESPONSE")
+            print(f"{'='*60}")
+            print(f"  Status:   {response.status_code}")
+            print(f"  Duration: {duration_ms:.2f}ms")
+            try:
+                print(f"  Body:     {json.dumps(response.json(), indent=4)}")
+            except:
+                print(f"  Body:     {response.text[:500] if response.text else '(empty)'}")
+            print(f"{'='*60}\n")
 
             self.stream_active = False
 
@@ -495,6 +546,7 @@ class CameraStreamController:
                 return True, f"Stream stop request sent (HTTP {response.status_code})"
 
         except requests.exceptions.RequestException as e:
+            print(f"\n❌ CAMERA API - REQUEST FAILED: {e}\n")
             self.stream_active = False
             return False, f"Error stopping stream: {str(e)}"
 
