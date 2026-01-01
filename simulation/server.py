@@ -551,8 +551,8 @@ Examples:
 
     args = parser.parse_args()
 
-    # Configure logging
-    log_level = logging.DEBUG if args.verbose else logging.INFO
+    # Configure logging (DEBUG enabled by default)
+    log_level = logging.DEBUG
     logging.basicConfig(
         level=log_level,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
