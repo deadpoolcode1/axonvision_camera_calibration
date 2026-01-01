@@ -2,6 +2,19 @@
 Configuration Management Module
 
 Provides centralized configuration with YAML file and environment variable support.
+
+This module includes:
+- Config: General application configuration (camera calibration tool)
+- EdgeSAConfig: EdgeSA distributed surveillance system configuration
+
+Usage:
+    # For camera calibration tool config
+    from config import config
+    app_name = config.app_name
+
+    # For EdgeSA configuration
+    from config import edgesa_config
+    discovery_url = edgesa_config.discovery.base_url
 """
 
 import os
@@ -141,3 +154,20 @@ class Config:
 
 # Singleton instance
 config = Config()
+
+# EdgeSA configuration exports (lazy-loaded)
+from .edgesa_config import EdgeSAConfig, edgesa_config, get_edgesa_config
+from .exceptions import (
+    ConfigurationLoadError,
+    ConfigurationValidationError
+)
+
+__all__ = [
+    'Config',
+    'config',
+    'EdgeSAConfig',
+    'edgesa_config',
+    'get_edgesa_config',
+    'ConfigurationLoadError',
+    'ConfigurationValidationError'
+]
